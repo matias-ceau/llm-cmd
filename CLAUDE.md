@@ -41,3 +41,8 @@ Single-file implementation: `llm_cmd.py`
 - **Provider config**: resolved at module level from env vars — changing provider requires no code changes
 
 Branch strategy: `main` = stable tagged releases, `dev/*` = feature branches, merge to main when tests pass.
+
+## Git rules
+
+- Every `git commit` is immediately followed by `git push origin <branch>` — local-only commits do not exist.
+- Install with `uv tool install -e .` (never `pip install`).
