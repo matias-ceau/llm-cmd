@@ -10,12 +10,20 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
-EXECUTE_SYSTEM_PROMPT = (
-    "You are a shell command generator for Linux/bash. "
-    "Output ONLY a single executable shell command that accomplishes the user's request. "
-    "No explanation. No markdown. No code fences. No newlines. "
-    "Chain multiple steps with && or semicolons if needed."
+CODE_SYSTEM_PROMPT = (
+    "You are an expert programmer. Output ONLY raw code — no explanation, "
+    "no markdown fences, no prose before or after."
 )
+
+
+def _execute_prompt() -> str:
+    shell = Path(os.environ.get("SHELL", "/bin/bash")).name
+    return (
+        f"You are a shell command generator for {shell}. "
+        "Output ONLY a single executable shell command that accomplishes the user's request. "
+        "No explanation. No markdown. No code fences. No newlines. "
+        "Chain multiple steps with && or semicolons if needed."
+    )
 
 # Provider config — override via env vars:
 #   LLM_CMD_MODEL   — model name          (e.g. anthropic/claude-3-5-haiku)
@@ -97,7 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="llm-cmd",
         description="Ask questions or run AI-generated shell commands — no quotes needed.",
-        usage="%(prog)s [-e] [-m MODEL] [-s SYSTEM] [words ...]",
+        usage="%(prog)s [-e|-c] [-m MODEL] [-s SYSTEM] [words ...]",
     )
     parser.add_argument(
         "words",
@@ -108,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-e", "--execute",
         action="store_true",
         help="Execute mode: generate and run a shell command.",
+    )
+    parser.add_argument(
+        "-c", "--code",
+        action="store_true",
+        help="Code mode: generate code and print to stdout.",
     )
     model_arg = parser.add_argument(
         "-m", "--model",
@@ -165,7 +178,7 @@ def _make_request(prompt: str, model: str, system: str | None, stream: bool) -> 
         sys.exit(1)
 
     parsed = urlparse(_API_URL)
-    conn = http.client.HTTPSConnection(parsed.netloc, context=_SSL_CTX)
+    conn = http.client.HTTPSConnection(parsed.netloc, context=_SSL_CTX, timeout=30)
 
     messages = []
     if system:
@@ -173,11 +186,15 @@ def _make_request(prompt: str, model: str, system: str | None, stream: bool) -> 
     messages.append({"role": "user", "content": prompt})
 
     body = json.dumps({"model": model, "messages": messages, "stream": stream})
-    conn.request("POST", parsed.path, body, {
-        "Authorization": f"Bearer {_API_KEY}",
-        "Content-Type": "application/json",
-    })
-    resp = conn.getresponse()
+    try:
+        conn.request("POST", parsed.path, body, {
+            "Authorization": f"Bearer {_API_KEY}",
+            "Content-Type": "application/json",
+        })
+        resp = conn.getresponse()
+    except OSError as e:
+        print(f"Connection error: {e}", file=sys.stderr)
+        sys.exit(1)
     if resp.status != 200:
         print(f"API error {resp.status}: {resp.read().decode()}", file=sys.stderr)
         sys.exit(1)
@@ -279,8 +296,9 @@ def main() -> None:
     prompt = get_prompt(args)
 
     if args.execute:
-        system = args.system or EXECUTE_SYSTEM_PROMPT
-        confirm_and_run(call_llm_capture(prompt, args.model, system))
+        confirm_and_run(call_llm_capture(prompt, args.model, args.system or _execute_prompt()))
+    elif args.code:
+        call_llm_streaming(prompt, args.model, args.system or CODE_SYSTEM_PROMPT)
     else:
         call_llm_streaming(prompt, args.model, args.system)
 
