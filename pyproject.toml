@@ -1,0 +1,14 @@
+[project]
+name = "llm-cmd"
+version = "0.1.0"
+description = "No-TUI LLM CLI — ask questions and run AI-generated shell commands"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = ["argcomplete"]
+
+[project.scripts]
+llm-cmd = "llm_cmd:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
