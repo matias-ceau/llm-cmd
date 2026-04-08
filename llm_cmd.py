@@ -30,18 +30,15 @@ _API_KEY = os.environ.get("LLM_CMD_API_KEY") or os.environ.get("OPENROUTER_API_K
 _CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "llm-cmd"
 _MODELS_CACHE = _CACHE_DIR / "models.json"
 _CACHE_TTL = 43200
+_SSL_CTX = ssl.create_default_context()
 
 
 # ── Model cache ──────────────────────────────────────────────────────────────
 
 def _models_url() -> str:
     parsed = urlparse(_API_URL)
-    path = parsed.path
-    if path.endswith("/chat/completions"):
-        path = path[: -len("/chat/completions")] + "/models"
-    else:
-        path = path.rsplit("/", 1)[0] + "/models"
-    return f"{parsed.scheme}://{parsed.netloc}{path}"
+    base = parsed.path.removesuffix("/chat/completions")
+    return f"{parsed.scheme}://{parsed.netloc}{base}/models"
 
 
 def _load_models() -> list[str]:
@@ -59,8 +56,11 @@ def _maybe_update_models_bg() -> None:
     """Spawn a detached background process to refresh the model cache if older than 12h."""
     if os.environ.get("_LLM_CMD_BG_UPDATE"):
         return  # we ARE the background process, don't recurse
-    if _MODELS_CACHE.exists() and time.time() - _MODELS_CACHE.stat().st_mtime < _CACHE_TTL:
-        return  # cache is fresh enough
+    try:
+        if time.time() - _MODELS_CACHE.stat().st_mtime < _CACHE_TTL:
+            return  # cache is fresh enough
+    except FileNotFoundError:
+        pass
     subprocess.Popen(
         [
             sys.executable, "-c",
@@ -79,7 +79,7 @@ def _fetch_models() -> list[str]:
     """Fetch model list from provider, save to cache, return sorted IDs."""
     url = _models_url()
     parsed = urlparse(url)
-    conn = http.client.HTTPSConnection(parsed.netloc, context=ssl.create_default_context())
+    conn = http.client.HTTPSConnection(parsed.netloc, context=_SSL_CTX)
     conn.request("GET", parsed.path, headers={"Authorization": f"Bearer {_API_KEY}"})
     resp = conn.getresponse()
     if resp.status != 200:
@@ -165,7 +165,7 @@ def _make_request(prompt: str, model: str, system: str | None, stream: bool) -> 
         sys.exit(1)
 
     parsed = urlparse(_API_URL)
-    conn = http.client.HTTPSConnection(parsed.netloc, context=ssl.create_default_context())
+    conn = http.client.HTTPSConnection(parsed.netloc, context=_SSL_CTX)
 
     messages = []
     if system:
