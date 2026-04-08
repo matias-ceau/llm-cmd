@@ -10,7 +10,10 @@ dependencies = ["argcomplete"]
 dev = ["pytest"]
 
 [project.scripts]
-llm-cmd = "llm_cmd:main"
+llm-cmd        = "llm_cmd:main"
+llm-cmd-model  = "llm_cmd:main_model"
+llm-cmd-status = "llm_cmd:main_status"
+llm-cmd-cost   = "llm_cmd:main_cost"
 
 [build-system]
 requires = ["hatchling"]
