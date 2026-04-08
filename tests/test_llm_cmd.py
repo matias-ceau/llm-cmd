@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import time
 from unittest.mock import MagicMock, patch
@@ -43,6 +44,17 @@ def _mock_conn(resp: MockHTTPResponse) -> MagicMock:
     conn = MagicMock()
     conn.getresponse.return_value = resp
     return conn
+
+
+@pytest.fixture
+def mock_http():
+    """Patches HTTPSConnection + API key. Yields a factory: resp -> http_cls mock."""
+    with patch("http.client.HTTPSConnection") as http_cls, \
+         patch("llm_cmd._API_KEY", "key"):
+        def setup(resp: MockHTTPResponse) -> MagicMock:
+            http_cls.return_value = _mock_conn(resp)
+            return http_cls
+        yield setup
 
 
 # ── _strip_fences ─────────────────────────────────────────────────────────────
@@ -176,7 +188,6 @@ class TestLoadModels:
             assert _load_models() == []
 
     def test_stale_cache_still_returned(self, tmp_path):
-        """Stale data is served — background refresh handles updates, not _load_models."""
         cache = tmp_path / "models.json"
         cache.write_text(json.dumps({"data": [{"id": "old/model"}]}))
         old = time.time() - 999_999
@@ -244,85 +255,67 @@ class TestMakeRequest:
                 llm_cmd._make_request("p", "m", None, False)
         assert exc.value.code == 1
 
-    def test_http_error_exits(self):
-        resp = MockHTTPResponse(401, b'{"error":"unauthorized"}')
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(resp)
-            with patch("llm_cmd._API_KEY", "key"):
-                with pytest.raises(SystemExit) as exc:
-                    llm_cmd._make_request("p", "m", None, False)
+    def test_http_error_exits(self, mock_http):
+        mock_http(MockHTTPResponse(401, b'{"error":"unauthorized"}'))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd._make_request("p", "m", None, False)
         assert exc.value.code == 1
 
-    def test_system_message_included(self):
+    def test_system_message_included(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
-        resp = MockHTTPResponse(200, body)
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(resp)
-            with patch("llm_cmd._API_KEY", "key"):
-                llm_cmd._make_request("prompt", "model", "be terse", False)
-        _, _, body_arg, _ = cls.return_value.request.call_args[0]
+        http_cls = mock_http(MockHTTPResponse(200, body))
+        llm_cmd._make_request("prompt", "model", "be terse", False)
+        _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
         msgs = json.loads(body_arg)["messages"]
         assert msgs[0] == {"role": "system", "content": "be terse"}
         assert msgs[1] == {"role": "user", "content": "prompt"}
 
-    def test_no_system_message_when_none(self):
+    def test_no_system_message_when_none(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
-        resp = MockHTTPResponse(200, body)
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(resp)
-            with patch("llm_cmd._API_KEY", "key"):
-                llm_cmd._make_request("prompt", "model", None, False)
-        _, _, body_arg, _ = cls.return_value.request.call_args[0]
+        http_cls = mock_http(MockHTTPResponse(200, body))
+        llm_cmd._make_request("prompt", "model", None, False)
+        _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
         msgs = json.loads(body_arg)["messages"]
         assert len(msgs) == 1
         assert msgs[0]["role"] == "user"
 
 
 class TestCallLlmStreaming:
-    def test_prints_content(self, capsys):
+    def test_prints_content(self, mock_http, capsys):
         lines = [
             b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n',
             b'data: {"choices":[{"delta":{"content":" world"}}]}\n',
             b"data: [DONE]\n",
         ]
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(MockHTTPResponse(200, b"", lines))
-            with patch("llm_cmd._API_KEY", "key"):
-                llm_cmd.call_llm_streaming("hi", "m", None)
+        mock_http(MockHTTPResponse(200, b"", lines))
+        llm_cmd.call_llm_streaming("hi", "m", None)
         assert "Hello world" in capsys.readouterr().out
 
-    def test_skips_non_data_lines(self, capsys):
+    def test_skips_non_data_lines(self, mock_http, capsys):
         lines = [
             b": keep-alive\n",
             b'data: {"choices":[{"delta":{"content":"ok"}}]}\n',
             b"data: [DONE]\n",
         ]
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(MockHTTPResponse(200, b"", lines))
-            with patch("llm_cmd._API_KEY", "key"):
-                llm_cmd.call_llm_streaming("hi", "m", None)
+        mock_http(MockHTTPResponse(200, b"", lines))
+        llm_cmd.call_llm_streaming("hi", "m", None)
         assert "ok" in capsys.readouterr().out
 
-    def test_stops_at_done(self, capsys):
+    def test_stops_at_done(self, mock_http, capsys):
         lines = [
             b"data: [DONE]\n",
             b'data: {"choices":[{"delta":{"content":"SHOULD NOT APPEAR"}}]}\n',
         ]
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(MockHTTPResponse(200, b"", lines))
-            with patch("llm_cmd._API_KEY", "key"):
-                llm_cmd.call_llm_streaming("hi", "m", None)
+        mock_http(MockHTTPResponse(200, b"", lines))
+        llm_cmd.call_llm_streaming("hi", "m", None)
         assert "SHOULD NOT APPEAR" not in capsys.readouterr().out
 
 
 class TestCallLlmCapture:
-    def test_returns_stripped_content(self):
+    def test_returns_stripped_content(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "  result  "}}]}).encode()
-        with patch("http.client.HTTPSConnection") as cls:
-            cls.return_value = _mock_conn(MockHTTPResponse(200, body))
-            with patch("llm_cmd._API_KEY", "key"):
-                result = llm_cmd.call_llm_capture("p", "m", "sys")
-        assert result == "result"
+        mock_http(MockHTTPResponse(200, body))
+        assert llm_cmd.call_llm_capture("p", "m", "sys") == "result"
 
 
 # ── confirm_and_run ───────────────────────────────────────────────────────────
@@ -363,22 +356,13 @@ class TestConfirmAndRun:
                     llm_cmd.confirm_and_run("```bash\nls -la\n```")
         run.assert_called_once_with("ls -la", shell=True)
 
-    def test_e_opens_editor_then_reruns(self, tmp_path):
+    def test_e_opens_editor_then_reruns(self):
         edited_cmd = "ls -lah"
-
-        def fake_editor(path):
-            # Write the edited command to the tmp file
-            import re
-            m = re.search(r'"(.+?)"', path)
-            if m:
-                with open(m.group(1), "w") as f:
-                    f.write(edited_cmd)
-
         responses = iter(["e", "y"])
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
             with patch("builtins.input", side_effect=responses):
-                with patch("os.system", side_effect=fake_editor):
+                with patch("llm_cmd._edit_in_editor", return_value=edited_cmd):
                     with pytest.raises(SystemExit):
                         llm_cmd.confirm_and_run("ls -la")
         run.assert_called_once_with(edited_cmd, shell=True)
