@@ -3,19 +3,23 @@ import os
 import re
 import subprocess
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 import llm_cmd
 from llm_cmd import (
+    _UsageStats,
+    _build_user_content,
     _execute_prompt,
+    _is_image_url,
     _load_models,
     _maybe_update_models_bg,
     _models_url,
     _strip_fences,
     build_parser,
-    get_prompt,
+    get_content,
 )
 
 
@@ -83,12 +87,14 @@ class TestStripFences:
         assert _strip_fences("```bash\ncmd1 && cmd2\n```") == "cmd1 && cmd2"
 
 
-# ── build_parser / get_prompt ─────────────────────────────────────────────────
+# ── build_parser / get_content ────────────────────────────────────────────────
 
 class TestParser:
     def test_words_joined(self):
         args = build_parser().parse_args(["what", "is", "X"])
-        assert get_prompt(args) == "what is X"
+        content, mods = get_content(args)
+        assert content == "what is X"
+        assert mods == set()
 
     def test_default_model(self):
         args = build_parser().parse_args(["hi"])
@@ -111,7 +117,7 @@ class TestParser:
         assert build_parser().parse_args(["-c", "write a sort"]).code is True
 
     def test_system_flag(self):
-        args = build_parser().parse_args(["-s", "be terse", "hi"])
+        args = build_parser().parse_args(["-S", "be terse", "hi"])
         assert args.system == "be terse"
 
     def test_update_models_flag(self):
@@ -120,15 +126,39 @@ class TestParser:
     def test_list_models_flag(self):
         assert build_parser().parse_args(["--list-models"]).list_models is True
 
+    def test_session_flag(self):
+        args = build_parser().parse_args(["-s", "myconv", "hi"])
+        assert args.session == "myconv"
 
-class TestGetPrompt:
+    def test_session_auto(self):
+        args = build_parser().parse_args(["-s", "auto", "hi"])
+        assert args.session == "auto"
+
+    def test_follow_up_flag(self):
+        assert build_parser().parse_args(["-f", "hi"]).follow_up is True
+
+    def test_input_flag(self):
+        args = build_parser().parse_args(["-i", "photo.jpg", "describe"])
+        assert args.input == ["photo.jpg"]
+
+    def test_input_flag_repeatable(self):
+        args = build_parser().parse_args(["-i", "a.jpg", "-i", "b.png", "describe"])
+        assert args.input == ["a.jpg", "b.png"]
+
+    def test_quiet_flag(self):
+        assert build_parser().parse_args(["-q", "hi"]).quiet is True
+
+
+class TestGetContent:
     def test_stdin_fallback(self):
         args = build_parser().parse_args([])
         stdin = MagicMock()
         stdin.isatty.return_value = False
         stdin.read.return_value = "  piped prompt\n"
         with patch("sys.stdin", stdin):
-            assert get_prompt(args) == "piped prompt"
+            content, mods = get_content(args)
+        assert content == "piped prompt"
+        assert mods == set()
 
     def test_tty_no_words_exits(self):
         args = build_parser().parse_args([])
@@ -136,7 +166,7 @@ class TestGetPrompt:
         stdin.isatty.return_value = True
         with patch("sys.stdin", stdin):
             with pytest.raises(SystemExit) as exc:
-                get_prompt(args)
+                get_content(args)
         assert exc.value.code == 1
 
     def test_empty_stdin_exits(self):
@@ -146,7 +176,7 @@ class TestGetPrompt:
         stdin.read.return_value = "   "
         with patch("sys.stdin", stdin):
             with pytest.raises(SystemExit) as exc:
-                get_prompt(args)
+                get_content(args)
         assert exc.value.code == 1
 
 
@@ -274,10 +304,17 @@ class TestMaybeUpdateModelsBg:
 # ── HTTP layer ────────────────────────────────────────────────────────────────
 
 class TestMakeRequest:
+    def _msgs(self, prompt="p", system=None):
+        msgs = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": prompt})
+        return msgs
+
     def test_no_api_key_exits(self):
         with patch("llm_cmd._API_KEY", ""):
             with pytest.raises(SystemExit) as exc:
-                llm_cmd._make_request("p", "m", None, False)
+                llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
 
     def test_connection_error_exits(self):
@@ -285,35 +322,54 @@ class TestMakeRequest:
             cls.return_value.request.side_effect = OSError("connection refused")
             with patch("llm_cmd._API_KEY", "key"):
                 with pytest.raises(SystemExit) as exc:
-                    llm_cmd._make_request("p", "m", None, False)
+                    llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
 
     def test_http_error_exits(self, mock_http):
         mock_http(MockHTTPResponse(401, b'{"error":"unauthorized"}'))
         with pytest.raises(SystemExit) as exc:
-            llm_cmd._make_request("p", "m", None, False)
+            llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
 
     def test_system_message_included(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
         http_cls = mock_http(MockHTTPResponse(200, body))
-        llm_cmd._make_request("prompt", "model", "be terse", False)
+        msgs = self._msgs("prompt", "be terse")
+        llm_cmd._make_request(msgs, "model", False)
         _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
-        msgs = json.loads(body_arg)["messages"]
-        assert msgs[0] == {"role": "system", "content": "be terse"}
-        assert msgs[1] == {"role": "user", "content": "prompt"}
+        sent_msgs = json.loads(body_arg)["messages"]
+        assert sent_msgs[0] == {"role": "system", "content": "be terse"}
+        assert sent_msgs[1] == {"role": "user", "content": "prompt"}
 
     def test_no_system_message_when_none(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
         http_cls = mock_http(MockHTTPResponse(200, body))
-        llm_cmd._make_request("prompt", "model", None, False)
+        msgs = self._msgs("prompt")
+        llm_cmd._make_request(msgs, "model", False)
         _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
-        msgs = json.loads(body_arg)["messages"]
-        assert len(msgs) == 1
-        assert msgs[0]["role"] == "user"
+        sent_msgs = json.loads(body_arg)["messages"]
+        assert len(sent_msgs) == 1
+        assert sent_msgs[0]["role"] == "user"
+
+    def test_stream_options_added_when_streaming(self, mock_http):
+        body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+        http_cls = mock_http(MockHTTPResponse(200, body))
+        llm_cmd._make_request(self._msgs(), "m", stream=True, include_usage=True)
+        _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
+        assert json.loads(body_arg).get("stream_options") == {"include_usage": True}
+
+    def test_no_stream_options_without_flag(self, mock_http):
+        body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+        http_cls = mock_http(MockHTTPResponse(200, body))
+        llm_cmd._make_request(self._msgs(), "m", stream=True, include_usage=False)
+        _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
+        assert "stream_options" not in json.loads(body_arg)
 
 
 class TestCallLlmStreaming:
+    def _msgs(self):
+        return [{"role": "user", "content": "hi"}]
+
     def test_prints_content(self, mock_http, capsys):
         lines = [
             b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n',
@@ -321,8 +377,9 @@ class TestCallLlmStreaming:
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        llm_cmd.call_llm_streaming("hi", "m", None)
+        text, _ = llm_cmd.call_llm_streaming(self._msgs(), "m")
         assert "Hello world" in capsys.readouterr().out
+        assert text == "Hello world"
 
     def test_skips_non_data_lines(self, mock_http, capsys):
         lines = [
@@ -331,7 +388,7 @@ class TestCallLlmStreaming:
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        llm_cmd.call_llm_streaming("hi", "m", None)
+        text, _ = llm_cmd.call_llm_streaming(self._msgs(), "m")
         assert "ok" in capsys.readouterr().out
 
     def test_stops_at_done(self, mock_http, capsys):
@@ -340,33 +397,9 @@ class TestCallLlmStreaming:
             b'data: {"choices":[{"delta":{"content":"SHOULD NOT APPEAR"}}]}\n',
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        llm_cmd.call_llm_streaming("hi", "m", None)
+        llm_cmd.call_llm_streaming(self._msgs(), "m")
         assert "SHOULD NOT APPEAR" not in capsys.readouterr().out
 
-
-class TestCallLlmCapture:
-    def test_returns_stripped_content(self, mock_http):
-        body = json.dumps({"choices": [{"message": {"content": "  result  "}}]}).encode()
-        mock_http(MockHTTPResponse(200, body))
-        text, stats = llm_cmd.call_llm_capture("p", "m", "sys")
-        assert text == "result"
-        assert stats is None  # no usage field in response
-
-    def test_returns_usage_stats(self, mock_http):
-        body = json.dumps({
-            "choices": [{"message": {"content": "hi"}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.0003},
-        }).encode()
-        mock_http(MockHTTPResponse(200, body))
-        text, stats = llm_cmd.call_llm_capture("p", "m", "sys")
-        assert text == "hi"
-        assert stats is not None
-        assert stats.prompt_tokens == 10
-        assert stats.completion_tokens == 20
-        assert stats.cost_usd == pytest.approx(0.0003)
-
-
-class TestCallLlmStreamingUsage:
     def test_captures_usage_chunk(self, mock_http, capsys):
         lines = [
             b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n',
@@ -374,7 +407,7 @@ class TestCallLlmStreamingUsage:
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        stats = llm_cmd.call_llm_streaming("hi", "m", None, collect_usage=True)
+        text, stats = llm_cmd.call_llm_streaming(self._msgs(), "m", collect_usage=True)
         assert stats is not None
         assert stats.prompt_tokens == 5
         assert stats.completion_tokens == 8
@@ -388,8 +421,33 @@ class TestCallLlmStreamingUsage:
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        stats = llm_cmd.call_llm_streaming("hi", "m", None, collect_usage=False)
+        _, stats = llm_cmd.call_llm_streaming(self._msgs(), "m", collect_usage=False)
         assert stats is None
+
+
+class TestCallLlmCapture:
+    def _msgs(self):
+        return [{"role": "user", "content": "p"}]
+
+    def test_returns_stripped_content(self, mock_http):
+        body = json.dumps({"choices": [{"message": {"content": "  result  "}}]}).encode()
+        mock_http(MockHTTPResponse(200, body))
+        text, stats = llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert text == "result"
+        assert stats is None
+
+    def test_returns_usage_stats(self, mock_http):
+        body = json.dumps({
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.0003},
+        }).encode()
+        mock_http(MockHTTPResponse(200, body))
+        text, stats = llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert text == "hi"
+        assert stats is not None
+        assert stats.prompt_tokens == 10
+        assert stats.completion_tokens == 20
+        assert stats.cost_usd == pytest.approx(0.0003)
 
 
 # ── confirm_and_run ───────────────────────────────────────────────────────────
@@ -405,7 +463,6 @@ class TestConfirmAndRun:
         run.assert_called_once_with("ls -la", shell=True)
 
     def test_empty_enter_runs_command(self):
-        # Y is the default — pressing Enter should run
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
             with patch("builtins.input", return_value=""):
@@ -450,8 +507,7 @@ class TestConfirmAndRun:
 
 class TestEditInEditor:
     def test_strips_comment_lines(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("EDITOR", "true")  # 'true' command exits immediately
-        # Write a temp file manually to simulate editor that doesn't change comments
+        monkeypatch.setenv("EDITOR", "true")
         with patch("tempfile.NamedTemporaryFile") as mock_ntf:
             tmpfile = tmp_path / "cmd.sh"
             tmpfile.write_text("# Prompt: test\n# ────\n\nls -la\n")
@@ -510,7 +566,7 @@ class TestConfig:
 
 class TestHistory:
     def test_record_and_summary(self, tmp_path):
-        stats = llm_cmd._UsageStats(
+        stats = _UsageStats(
             model="openai/gpt-4o-mini",
             prompt_tokens=10,
             completion_tokens=20,
@@ -530,8 +586,239 @@ class TestHistory:
             assert llm_cmd._cost_summary(7) == {}
 
     def test_record_never_crashes(self, tmp_path):
-        stats = llm_cmd._UsageStats(model="m", prompt_tokens=1, completion_tokens=1)
+        stats = _UsageStats(model="m", prompt_tokens=1, completion_tokens=1)
         with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
              patch("llm_cmd._DATA_DIR", tmp_path), \
              patch("sqlite3.connect", side_effect=Exception("db error")):
             llm_cmd._record_usage(stats, "chat")  # must not raise
+
+
+# ── Sessions ──────────────────────────────────────────────────────────────────
+
+class TestSessions:
+    def test_record_and_retrieve_messages(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            llm_cmd._record_message("sess1", "user",      "hello",    None,  None, "chat")
+            llm_cmd._record_message("sess1", "assistant", "world",    "gpt", None, "chat")
+            msgs = llm_cmd._get_session_messages("sess1")
+        assert len(msgs) == 2
+        assert msgs[0] == {"role": "user",      "content": "hello"}
+        assert msgs[1] == {"role": "assistant", "content": "world"}
+
+    def test_last_session_id(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            llm_cmd._record_message("first",  "user", "a", None, None, "chat")
+            llm_cmd._record_message("second", "user", "b", None, None, "chat")
+            last = llm_cmd._last_session_id()
+        assert last == "second"
+
+    def test_last_session_none_when_empty(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "missing.db"):
+            assert llm_cmd._last_session_id() is None
+
+    def test_resolve_session_none(self):
+        sid, msgs = llm_cmd._resolve_session(None, False)
+        assert sid is None
+        assert msgs == []
+
+    def test_resolve_session_named_new(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            sid, msgs = llm_cmd._resolve_session("myconv", False)
+        assert sid == "myconv"
+        assert msgs == []
+
+    def test_resolve_session_named_existing(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            llm_cmd._record_message("myconv", "user",      "hi",  None,  None, "chat")
+            llm_cmd._record_message("myconv", "assistant", "hey", "gpt", None, "chat")
+            sid, msgs = llm_cmd._resolve_session("myconv", False)
+        assert sid == "myconv"
+        assert len(msgs) == 2
+
+    def test_resolve_session_auto_generates_name(self, tmp_path, capsys):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            sid, msgs = llm_cmd._resolve_session("auto", False)
+        assert sid is not None
+        assert sid.startswith("auto-")
+        assert msgs == []
+        assert "Session:" in capsys.readouterr().err
+
+    def test_resolve_follow_up(self, tmp_path, capsys):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            llm_cmd._record_message("prev", "user",      "q", None,  None, "chat")
+            llm_cmd._record_message("prev", "assistant", "a", "gpt", None, "chat")
+            sid, msgs = llm_cmd._resolve_session(None, follow_up=True)
+        assert sid == "prev"
+        assert len(msgs) == 2
+
+    def test_resolve_follow_up_no_history_exits(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "missing.db"):
+            with pytest.raises(SystemExit):
+                llm_cmd._resolve_session(None, follow_up=True)
+
+    def test_session_and_followup_mutually_exclusive(self):
+        with pytest.raises(SystemExit):
+            llm_cmd._resolve_session("myconv", follow_up=True)
+
+    def test_multimodal_content_round_trip(self, tmp_path):
+        multimodal = [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            llm_cmd._record_message("mm", "user", multimodal, None, None, "chat")
+            msgs = llm_cmd._get_session_messages("mm")
+        assert msgs[0]["content"] == multimodal
+
+
+# ── Multimodal ────────────────────────────────────────────────────────────────
+
+class TestIsImageUrl:
+    def test_http_jpg(self):
+        assert _is_image_url("https://example.com/photo.jpg")
+
+    def test_https_png(self):
+        assert _is_image_url("https://example.com/img.png")
+
+    def test_not_an_image_url(self):
+        assert not _is_image_url("https://example.com/doc.pdf")
+
+    def test_not_a_url(self):
+        assert not _is_image_url("photo.jpg")
+
+    def test_http_not_https(self):
+        assert _is_image_url("http://example.com/a.webp")
+
+
+class TestBuildUserContent:
+    def test_plain_text_words(self):
+        content, mods = _build_user_content(["what", "is", "this"])
+        assert content == "what is this"
+        assert mods == set()
+
+    def test_image_url_in_words(self):
+        content, mods = _build_user_content(["describe", "https://example.com/photo.jpg"])
+        assert isinstance(content, list)
+        assert mods == {"image"}
+        text_part = next(p for p in content if p.get("type") == "text")
+        assert text_part["text"] == "describe"
+        img_part = next(p for p in content if p.get("type") == "image_url")
+        assert img_part["image_url"]["url"] == "https://example.com/photo.jpg"
+
+    def test_local_image_file(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.write_bytes(b"\x89PNG\r\n")  # minimal PNG header
+        content, mods = _build_user_content(["describe", str(img)])
+        assert isinstance(content, list)
+        assert "image" in mods
+        img_part = next(p for p in content if p.get("type") == "image_url")
+        assert img_part["image_url"]["url"].startswith("data:image/png;base64,")
+
+    def test_explicit_file_via_extra(self, tmp_path):
+        img = tmp_path / "photo.jpg"
+        img.write_bytes(b"\xff\xd8\xff")  # JPEG magic bytes
+        content, mods = _build_user_content(["what is this"], [str(img)])
+        assert isinstance(content, list)
+        assert "image" in mods
+
+    def test_nonexistent_explicit_file_warned(self, tmp_path, capsys):
+        _build_user_content(["hi"], ["/nonexistent/file.jpg"])
+        assert "not found" in capsys.readouterr().err
+
+    def test_non_media_file_ignored(self, tmp_path):
+        txt = tmp_path / "notes.txt"
+        txt.write_text("hello")
+        content, mods = _build_user_content(["read", str(txt)])
+        # .txt is not in _MEDIA_EXTENSIONS, treated as text token
+        assert isinstance(content, str)
+        assert mods == set()
+
+    def test_text_only_returns_str(self):
+        content, mods = _build_user_content(["hello", "world"])
+        assert isinstance(content, str)
+        assert content == "hello world"
+
+    def test_only_image_no_text(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.write_bytes(b"\x89PNG\r\n")
+        content, mods = _build_user_content([str(img)])
+        assert isinstance(content, list)
+        # No text part when only a file
+        text_parts = [p for p in content if p.get("type") == "text"]
+        assert text_parts == []
+
+
+class TestEncodeFileContent:
+    def test_image_format(self, tmp_path):
+        f = tmp_path / "img.png"
+        f.write_bytes(b"PNG")
+        part = llm_cmd._encode_file_content(f)
+        assert part["type"] == "image_url"
+        assert part["image_url"]["url"].startswith("data:image/png;base64,")
+
+    def test_pdf_format(self, tmp_path):
+        f = tmp_path / "doc.pdf"
+        f.write_bytes(b"%PDF")
+        part = llm_cmd._encode_file_content(f)
+        assert part["type"] == "file"
+        assert part["file"]["filename"] == "doc.pdf"
+
+    def test_audio_format(self, tmp_path):
+        f = tmp_path / "sound.mp3"
+        f.write_bytes(b"ID3")
+        part = llm_cmd._encode_file_content(f)
+        assert part["type"] == "input_audio"
+        assert part["input_audio"]["format"] == "mp3"
+
+    def test_video_format(self, tmp_path):
+        f = tmp_path / "clip.mp4"
+        f.write_bytes(b"\x00\x00\x00\x18")
+        part = llm_cmd._encode_file_content(f)
+        assert part["type"] == "video_url"
+        assert part["video_url"]["url"].startswith("data:video/mp4;base64,")
+
+
+class TestModalitySupport:
+    def _make_cache(self, tmp_path, models):
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": models}))
+        return cache
+
+    def test_supported_modality_no_error(self, tmp_path):
+        cache = self._make_cache(tmp_path, [
+            {"id": "m", "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}}
+        ])
+        with patch("llm_cmd._MODELS_CACHE", cache):
+            llm_cmd._check_modality_support("m", {"image"})  # should not raise
+
+    def test_unsupported_modality_exits(self, tmp_path, capsys):
+        cache = self._make_cache(tmp_path, [
+            {"id": "m", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}
+        ])
+        with patch("llm_cmd._MODELS_CACHE", cache):
+            with pytest.raises(SystemExit) as exc:
+                llm_cmd._check_modality_support("m", {"image"})
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "image" in err
+
+    def test_empty_needed_no_error(self, tmp_path):
+        llm_cmd._check_modality_support("any", set())  # should not raise
+
+    def test_list_by_modality(self, tmp_path):
+        cache = self._make_cache(tmp_path, [
+            {"id": "img-model", "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}},
+            {"id": "text-only", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}},
+            {"id": "audio-gen", "architecture": {"input_modalities": ["text"], "output_modalities": ["text", "audio"]}},
+        ])
+        with patch("llm_cmd._MODELS_CACHE", cache):
+            img_models = llm_cmd._list_models_by_modality(in_mods=["image"])
+            audio_out  = llm_cmd._list_models_by_modality(out_mods=["audio"])
+        assert "img-model" in img_models
+        assert "text-only" not in img_models
+        assert "audio-gen" in audio_out
+        assert "text-only" not in audio_out
