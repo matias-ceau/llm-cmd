@@ -81,3 +81,7 @@ export LLM_CMD_MODEL=gpt-4o-mini
 uv run pytest tests/ -v
 uv run llm_cmd.py <prompt>   # without installing
 ```
+
+## Acknowledgements
+
+Inspired by [aichat](https://github.com/sigoden/aichat) by [@sigoden](https://github.com/sigoden) — particularly its frictionless no-quote prompt UX and `-e` execute mode. `llm-cmd` is a minimal Python reimplementation focused on fast startup and zero configuration.
