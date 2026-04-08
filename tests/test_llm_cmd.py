@@ -9,6 +9,7 @@ import pytest
 
 import llm_cmd
 from llm_cmd import (
+    _execute_prompt,
     _load_models,
     _maybe_update_models_bg,
     _models_url,
@@ -103,6 +104,12 @@ class TestParser:
     def test_execute_flag(self):
         assert build_parser().parse_args(["-e", "do it"]).execute is True
 
+    def test_code_default_false(self):
+        assert build_parser().parse_args(["hi"]).code is False
+
+    def test_code_flag(self):
+        assert build_parser().parse_args(["-c", "write a sort"]).code is True
+
     def test_system_flag(self):
         args = build_parser().parse_args(["-s", "be terse", "hi"])
         assert args.system == "be terse"
@@ -141,6 +148,24 @@ class TestGetPrompt:
             with pytest.raises(SystemExit) as exc:
                 get_prompt(args)
         assert exc.value.code == 1
+
+
+# ── _execute_prompt ───────────────────────────────────────────────────────────
+
+class TestExecutePrompt:
+    def test_includes_shell_name(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        assert "zsh" in _execute_prompt()
+
+    def test_fallback_to_bash(self, monkeypatch):
+        monkeypatch.delenv("SHELL", raising=False)
+        assert "bash" in _execute_prompt()
+
+    def test_no_markdown_instruction(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/bin/bash")
+        prompt = _execute_prompt()
+        assert "No markdown" in prompt
+        assert "No code fences" in prompt
 
 
 # ── _models_url ───────────────────────────────────────────────────────────────
@@ -253,6 +278,14 @@ class TestMakeRequest:
         with patch("llm_cmd._API_KEY", ""):
             with pytest.raises(SystemExit) as exc:
                 llm_cmd._make_request("p", "m", None, False)
+        assert exc.value.code == 1
+
+    def test_connection_error_exits(self):
+        with patch("http.client.HTTPSConnection") as cls:
+            cls.return_value.request.side_effect = OSError("connection refused")
+            with patch("llm_cmd._API_KEY", "key"):
+                with pytest.raises(SystemExit) as exc:
+                    llm_cmd._make_request("p", "m", None, False)
         assert exc.value.code == 1
 
     def test_http_error_exits(self, mock_http):
