@@ -36,7 +36,11 @@ _CACHE_TTL = 43200
 
 def _models_url() -> str:
     parsed = urlparse(_API_URL)
-    path = parsed.path.rsplit("/", 1)[0] + "/models"
+    path = parsed.path
+    if path.endswith("/chat/completions"):
+        path = path[: -len("/chat/completions")] + "/models"
+    else:
+        path = path.rsplit("/", 1)[0] + "/models"
     return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
