@@ -348,7 +348,48 @@ class TestCallLlmCapture:
     def test_returns_stripped_content(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "  result  "}}]}).encode()
         mock_http(MockHTTPResponse(200, body))
-        assert llm_cmd.call_llm_capture("p", "m", "sys") == "result"
+        text, stats = llm_cmd.call_llm_capture("p", "m", "sys")
+        assert text == "result"
+        assert stats is None  # no usage field in response
+
+    def test_returns_usage_stats(self, mock_http):
+        body = json.dumps({
+            "choices": [{"message": {"content": "hi"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.0003},
+        }).encode()
+        mock_http(MockHTTPResponse(200, body))
+        text, stats = llm_cmd.call_llm_capture("p", "m", "sys")
+        assert text == "hi"
+        assert stats is not None
+        assert stats.prompt_tokens == 10
+        assert stats.completion_tokens == 20
+        assert stats.cost_usd == pytest.approx(0.0003)
+
+
+class TestCallLlmStreamingUsage:
+    def test_captures_usage_chunk(self, mock_http, capsys):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":8,"cost":0.001}}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        stats = llm_cmd.call_llm_streaming("hi", "m", None, collect_usage=True)
+        assert stats is not None
+        assert stats.prompt_tokens == 5
+        assert stats.completion_tokens == 8
+        assert stats.cost_usd == pytest.approx(0.001)
+        assert "Hello" in capsys.readouterr().out
+
+    def test_no_usage_when_not_requested(self, mock_http, capsys):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n',
+            b'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":8}}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        stats = llm_cmd.call_llm_streaming("hi", "m", None, collect_usage=False)
+        assert stats is None
 
 
 # ── confirm_and_run ───────────────────────────────────────────────────────────
@@ -359,26 +400,30 @@ class TestConfirmAndRun:
             run.return_value.returncode = 0
             with patch("builtins.input", return_value="y"):
                 with pytest.raises(SystemExit) as exc:
-                    llm_cmd.confirm_and_run("ls -la")
+                    llm_cmd.confirm_and_run("ls -la", "list files")
         assert exc.value.code == 0
         run.assert_called_once_with("ls -la", shell=True)
+
+    def test_empty_enter_runs_command(self):
+        # Y is the default — pressing Enter should run
+        with patch("subprocess.run") as run:
+            run.return_value.returncode = 0
+            with patch("builtins.input", return_value=""):
+                with pytest.raises(SystemExit) as exc:
+                    llm_cmd.confirm_and_run("ls", "list")
+        assert exc.value.code == 0
+        run.assert_called_once()
 
     def test_n_aborts(self):
         with patch("builtins.input", return_value="n"):
             with pytest.raises(SystemExit) as exc:
-                llm_cmd.confirm_and_run("ls")
-        assert exc.value.code == 0
-
-    def test_empty_enter_aborts(self):
-        with patch("builtins.input", return_value=""):
-            with pytest.raises(SystemExit) as exc:
-                llm_cmd.confirm_and_run("ls")
+                llm_cmd.confirm_and_run("ls", "list")
         assert exc.value.code == 0
 
     def test_ctrl_c_aborts(self):
         with patch("builtins.input", side_effect=KeyboardInterrupt):
             with pytest.raises(SystemExit) as exc:
-                llm_cmd.confirm_and_run("ls")
+                llm_cmd.confirm_and_run("ls", "list")
         assert exc.value.code == 0
 
     def test_fences_stripped_before_run(self):
@@ -386,7 +431,7 @@ class TestConfirmAndRun:
             run.return_value.returncode = 0
             with patch("builtins.input", return_value="y"):
                 with pytest.raises(SystemExit):
-                    llm_cmd.confirm_and_run("```bash\nls -la\n```")
+                    llm_cmd.confirm_and_run("```bash\nls -la\n```", "list")
         run.assert_called_once_with("ls -la", shell=True)
 
     def test_e_opens_editor_then_reruns(self):
@@ -397,5 +442,96 @@ class TestConfirmAndRun:
             with patch("builtins.input", side_effect=responses):
                 with patch("llm_cmd._edit_in_editor", return_value=edited_cmd):
                     with pytest.raises(SystemExit):
-                        llm_cmd.confirm_and_run("ls -la")
+                        llm_cmd.confirm_and_run("ls -la", "list files")
         run.assert_called_once_with(edited_cmd, shell=True)
+
+
+# ── _edit_in_editor ───────────────────────────────────────────────────────────
+
+class TestEditInEditor:
+    def test_strips_comment_lines(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EDITOR", "true")  # 'true' command exits immediately
+        # Write a temp file manually to simulate editor that doesn't change comments
+        with patch("tempfile.NamedTemporaryFile") as mock_ntf:
+            tmpfile = tmp_path / "cmd.sh"
+            tmpfile.write_text("# Prompt: test\n# ────\n\nls -la\n")
+            mock_ntf.return_value.__enter__ = lambda s: s
+            mock_ntf.return_value.__exit__ = lambda *a: False
+            mock_ntf.return_value.name = str(tmpfile)
+            with patch("os.system"):
+                with patch("os.unlink"):
+                    result = llm_cmd._edit_in_editor("ls -la", "test")
+        assert "#" not in result
+        assert "ls -la" in result
+
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+class TestConfig:
+    def test_load_missing_returns_empty(self, tmp_path):
+        with patch("llm_cmd._CONFIG_FILE", tmp_path / "config.json"):
+            assert llm_cmd._load_config() == {}
+
+    def test_round_trip(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        with patch("llm_cmd._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd._CONFIG_DIR", tmp_path):
+            llm_cmd._save_config({"default_model": "openai/gpt-4o"})
+            result = llm_cmd._load_config()
+        assert result == {"default_model": "openai/gpt-4o"}
+
+    def test_load_corrupted_returns_empty(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text("not json{{")
+        with patch("llm_cmd._CONFIG_FILE", cfg_file):
+            assert llm_cmd._load_config() == {}
+
+    def test_resolve_env_takes_priority(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LLM_CMD_MODEL", "env/model")
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "config/model"}))
+        with patch("llm_cmd._CONFIG_FILE", cfg_file):
+            assert llm_cmd._resolve_default_model() == "env/model"
+
+    def test_resolve_config_over_hardcoded(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "config/model"}))
+        with patch("llm_cmd._CONFIG_FILE", cfg_file):
+            assert llm_cmd._resolve_default_model() == "config/model"
+
+    def test_resolve_hardcoded_fallback(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
+        with patch("llm_cmd._CONFIG_FILE", tmp_path / "missing.json"):
+            assert llm_cmd._resolve_default_model() == "openai/gpt-4o-mini"
+
+
+# ── History / SQLite ──────────────────────────────────────────────────────────
+
+class TestHistory:
+    def test_record_and_summary(self, tmp_path):
+        stats = llm_cmd._UsageStats(
+            model="openai/gpt-4o-mini",
+            prompt_tokens=10,
+            completion_tokens=20,
+            cost_usd=0.0002,
+        )
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path):
+            llm_cmd._record_usage(stats, "chat")
+            s = llm_cmd._cost_summary(1)
+        assert s["requests"] == 1
+        assert s["prompt_tokens"] == 10
+        assert s["completion_tokens"] == 20
+        assert s["cost_usd"] == pytest.approx(0.0002)
+
+    def test_summary_empty_db(self, tmp_path):
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "missing.db"):
+            assert llm_cmd._cost_summary(7) == {}
+
+    def test_record_never_crashes(self, tmp_path):
+        stats = llm_cmd._UsageStats(model="m", prompt_tokens=1, completion_tokens=1)
+        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd._DATA_DIR", tmp_path), \
+             patch("sqlite3.connect", side_effect=Exception("db error")):
+            llm_cmd._record_usage(stats, "chat")  # must not raise
