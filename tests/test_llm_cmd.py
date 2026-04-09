@@ -55,7 +55,7 @@ def _mock_conn(resp: MockHTTPResponse) -> MagicMock:
 def mock_http():
     """Patches HTTPSConnection + API key. Yields a factory: resp -> http_cls mock."""
     with patch("http.client.HTTPSConnection") as http_cls, \
-         patch("llm_cmd._API_KEY", "key"):
+         patch("llm_cmd.constants._API_KEY", "key"):
         def setup(resp: MockHTTPResponse) -> MagicMock:
             http_cls.return_value = _mock_conn(resp)
             return http_cls
@@ -216,7 +216,7 @@ class TestModelsUrl:
         ),
     ])
     def test_derives_models_url(self, api_url, expected):
-        with patch("llm_cmd._API_URL", api_url):
+        with patch("llm_cmd.constants._API_URL", api_url):
             assert _models_url() == expected
 
 
@@ -224,7 +224,7 @@ class TestModelsUrl:
 
 class TestLoadModels:
     def test_missing_cache_returns_empty(self, tmp_path):
-        with patch("llm_cmd._MODELS_CACHE", tmp_path / "models.json"):
+        with patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "models.json"):
             assert _load_models() == []
 
     def test_valid_cache_sorted(self, tmp_path):
@@ -233,13 +233,13 @@ class TestLoadModels:
             {"id": "openai/gpt-4o"},
             {"id": "anthropic/claude-3-5-haiku"},
         ]}))
-        with patch("llm_cmd._MODELS_CACHE", cache):
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
             assert _load_models() == ["anthropic/claude-3-5-haiku", "openai/gpt-4o"]
 
     def test_corrupted_cache_returns_empty(self, tmp_path):
         cache = tmp_path / "models.json"
         cache.write_text("not json{{")
-        with patch("llm_cmd._MODELS_CACHE", cache):
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
             assert _load_models() == []
 
     def test_stale_cache_still_returned(self, tmp_path):
@@ -247,7 +247,7 @@ class TestLoadModels:
         cache.write_text(json.dumps({"data": [{"id": "old/model"}]}))
         old = time.time() - 999_999
         os.utime(cache, (old, old))
-        with patch("llm_cmd._MODELS_CACHE", cache):
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
             assert _load_models() == ["old/model"]
 
 
@@ -257,7 +257,7 @@ class TestMaybeUpdateModelsBg:
     def test_skips_when_bg_env_set(self, monkeypatch, tmp_path):
         monkeypatch.setenv("_LLM_CMD_BG_UPDATE", "1")
         with patch("subprocess.Popen") as popen:
-            with patch("llm_cmd._MODELS_CACHE", tmp_path / "missing.json"):
+            with patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "missing.json"):
                 _maybe_update_models_bg()
         popen.assert_not_called()
 
@@ -267,14 +267,14 @@ class TestMaybeUpdateModelsBg:
         cache.write_text("{}")
         os.utime(cache, (time.time(), time.time()))
         with patch("subprocess.Popen") as popen:
-            with patch("llm_cmd._MODELS_CACHE", cache):
+            with patch("llm_cmd.constants._MODELS_CACHE", cache):
                 _maybe_update_models_bg()
         popen.assert_not_called()
 
     def test_spawns_when_cache_missing(self, monkeypatch, tmp_path):
         monkeypatch.delenv("_LLM_CMD_BG_UPDATE", raising=False)
         with patch("subprocess.Popen") as popen:
-            with patch("llm_cmd._MODELS_CACHE", tmp_path / "missing.json"):
+            with patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "missing.json"):
                 _maybe_update_models_bg()
         popen.assert_called_once()
 
@@ -285,14 +285,14 @@ class TestMaybeUpdateModelsBg:
         old = time.time() - (llm_cmd._CACHE_TTL + 1)
         os.utime(cache, (old, old))
         with patch("subprocess.Popen") as popen:
-            with patch("llm_cmd._MODELS_CACHE", cache):
+            with patch("llm_cmd.constants._MODELS_CACHE", cache):
                 _maybe_update_models_bg()
         popen.assert_called_once()
 
     def test_spawned_process_is_detached(self, monkeypatch, tmp_path):
         monkeypatch.delenv("_LLM_CMD_BG_UPDATE", raising=False)
         with patch("subprocess.Popen") as popen:
-            with patch("llm_cmd._MODELS_CACHE", tmp_path / "missing.json"):
+            with patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "missing.json"):
                 _maybe_update_models_bg()
         _, kwargs = popen.call_args
         assert kwargs.get("start_new_session") is True
@@ -312,7 +312,7 @@ class TestMakeRequest:
         return msgs
 
     def test_no_api_key_exits(self):
-        with patch("llm_cmd._API_KEY", ""):
+        with patch("llm_cmd.constants._API_KEY", ""):
             with pytest.raises(SystemExit) as exc:
                 llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
@@ -320,7 +320,7 @@ class TestMakeRequest:
     def test_connection_error_exits(self):
         with patch("http.client.HTTPSConnection") as cls:
             cls.return_value.request.side_effect = OSError("connection refused")
-            with patch("llm_cmd._API_KEY", "key"):
+            with patch("llm_cmd.constants._API_KEY", "key"):
                 with pytest.raises(SystemExit) as exc:
                     llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
@@ -497,7 +497,7 @@ class TestConfirmAndRun:
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
             with patch("builtins.input", side_effect=responses):
-                with patch("llm_cmd._edit_in_editor", return_value=edited_cmd):
+                with patch("llm_cmd.execute._edit_in_editor", return_value=edited_cmd):
                     with pytest.raises(SystemExit):
                         llm_cmd.confirm_and_run("ls -la", "list files")
         run.assert_called_once_with(edited_cmd, shell=True)
@@ -525,13 +525,13 @@ class TestEditInEditor:
 
 class TestConfig:
     def test_load_missing_returns_empty(self, tmp_path):
-        with patch("llm_cmd._CONFIG_FILE", tmp_path / "config.json"):
+        with patch("llm_cmd.constants._CONFIG_FILE", tmp_path / "config.json"):
             assert llm_cmd._load_config() == {}
 
     def test_round_trip(self, tmp_path):
         cfg_file = tmp_path / "config.json"
-        with patch("llm_cmd._CONFIG_FILE", cfg_file), \
-             patch("llm_cmd._CONFIG_DIR", tmp_path):
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
             llm_cmd._save_config({"default_model": "openai/gpt-4o"})
             result = llm_cmd._load_config()
         assert result == {"default_model": "openai/gpt-4o"}
@@ -539,26 +539,26 @@ class TestConfig:
     def test_load_corrupted_returns_empty(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("not json{{")
-        with patch("llm_cmd._CONFIG_FILE", cfg_file):
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file):
             assert llm_cmd._load_config() == {}
 
     def test_resolve_env_takes_priority(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LLM_CMD_MODEL", "env/model")
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"default_model": "config/model"}))
-        with patch("llm_cmd._CONFIG_FILE", cfg_file):
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file):
             assert llm_cmd._resolve_default_model() == "env/model"
 
     def test_resolve_config_over_hardcoded(self, monkeypatch, tmp_path):
         monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"default_model": "config/model"}))
-        with patch("llm_cmd._CONFIG_FILE", cfg_file):
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file):
             assert llm_cmd._resolve_default_model() == "config/model"
 
     def test_resolve_hardcoded_fallback(self, monkeypatch, tmp_path):
         monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
-        with patch("llm_cmd._CONFIG_FILE", tmp_path / "missing.json"):
+        with patch("llm_cmd.constants._CONFIG_FILE", tmp_path / "missing.json"):
             assert llm_cmd._resolve_default_model() == "openai/gpt-4o-mini"
 
 
@@ -572,8 +572,8 @@ class TestHistory:
             completion_tokens=20,
             cost_usd=0.0002,
         )
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             llm_cmd._record_usage(stats, "chat")
             s = llm_cmd._cost_summary(1)
         assert s["requests"] == 1
@@ -582,13 +582,13 @@ class TestHistory:
         assert s["cost_usd"] == pytest.approx(0.0002)
 
     def test_summary_empty_db(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "missing.db"):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "missing.db"):
             assert llm_cmd._cost_summary(7) == {}
 
     def test_record_never_crashes(self, tmp_path):
         stats = _UsageStats(model="m", prompt_tokens=1, completion_tokens=1)
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path), \
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path), \
              patch("sqlite3.connect", side_effect=Exception("db error")):
             llm_cmd._record_usage(stats, "chat")  # must not raise
 
@@ -597,8 +597,8 @@ class TestHistory:
 
 class TestSessions:
     def test_record_and_retrieve_messages(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             llm_cmd._record_message("sess1", "user",      "hello",    None,  None, "chat")
             llm_cmd._record_message("sess1", "assistant", "world",    "gpt", None, "chat")
             msgs = llm_cmd._get_session_messages("sess1")
@@ -607,15 +607,15 @@ class TestSessions:
         assert msgs[1] == {"role": "assistant", "content": "world"}
 
     def test_last_session_id(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             llm_cmd._record_message("first",  "user", "a", None, None, "chat")
             llm_cmd._record_message("second", "user", "b", None, None, "chat")
             last = llm_cmd._last_session_id()
         assert last == "second"
 
     def test_last_session_none_when_empty(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "missing.db"):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "missing.db"):
             assert llm_cmd._last_session_id() is None
 
     def test_resolve_session_none(self):
@@ -624,15 +624,15 @@ class TestSessions:
         assert msgs == []
 
     def test_resolve_session_named_new(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             sid, msgs = llm_cmd._resolve_session("myconv", False)
         assert sid == "myconv"
         assert msgs == []
 
     def test_resolve_session_named_existing(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             llm_cmd._record_message("myconv", "user",      "hi",  None,  None, "chat")
             llm_cmd._record_message("myconv", "assistant", "hey", "gpt", None, "chat")
             sid, msgs = llm_cmd._resolve_session("myconv", False)
@@ -640,8 +640,8 @@ class TestSessions:
         assert len(msgs) == 2
 
     def test_resolve_session_auto_generates_name(self, tmp_path, capsys):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             sid, msgs = llm_cmd._resolve_session("auto", False)
         assert sid is not None
         assert sid.startswith("auto-")
@@ -649,8 +649,8 @@ class TestSessions:
         assert "Session:" in capsys.readouterr().err
 
     def test_resolve_follow_up(self, tmp_path, capsys):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             llm_cmd._record_message("prev", "user",      "q", None,  None, "chat")
             llm_cmd._record_message("prev", "assistant", "a", "gpt", None, "chat")
             sid, msgs = llm_cmd._resolve_session(None, follow_up=True)
@@ -658,7 +658,7 @@ class TestSessions:
         assert len(msgs) == 2
 
     def test_resolve_follow_up_no_history_exits(self, tmp_path):
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "missing.db"):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "missing.db"):
             with pytest.raises(SystemExit):
                 llm_cmd._resolve_session(None, follow_up=True)
 
@@ -668,8 +668,8 @@ class TestSessions:
 
     def test_multimodal_content_round_trip(self, tmp_path):
         multimodal = [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
-        with patch("llm_cmd._HISTORY_DB", tmp_path / "history.db"), \
-             patch("llm_cmd._DATA_DIR", tmp_path):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
             llm_cmd._record_message("mm", "user", multimodal, None, None, "chat")
             msgs = llm_cmd._get_session_messages("mm")
         assert msgs[0]["content"] == multimodal
@@ -792,14 +792,14 @@ class TestModalitySupport:
         cache = self._make_cache(tmp_path, [
             {"id": "m", "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}}
         ])
-        with patch("llm_cmd._MODELS_CACHE", cache):
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
             llm_cmd._check_modality_support("m", {"image"})  # should not raise
 
     def test_unsupported_modality_exits(self, tmp_path, capsys):
         cache = self._make_cache(tmp_path, [
             {"id": "m", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}
         ])
-        with patch("llm_cmd._MODELS_CACHE", cache):
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
             with pytest.raises(SystemExit) as exc:
                 llm_cmd._check_modality_support("m", {"image"})
         assert exc.value.code == 1
@@ -815,7 +815,7 @@ class TestModalitySupport:
             {"id": "text-only", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}},
             {"id": "audio-gen", "architecture": {"input_modalities": ["text"], "output_modalities": ["text", "audio"]}},
         ])
-        with patch("llm_cmd._MODELS_CACHE", cache):
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
             img_models = llm_cmd._list_models_by_modality(in_mods=["image"])
             audio_out  = llm_cmd._list_models_by_modality(out_mods=["audio"])
         assert "img-model" in img_models
