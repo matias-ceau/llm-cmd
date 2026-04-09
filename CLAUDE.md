@@ -28,15 +28,32 @@ llm-cmd --update-models
 ## Development commands
 
 ```bash
-uv run llm_cmd.py <prompt>       # run without installing
-llm-cmd --list-models            # inspect model cache
-llm-cmd --update-models          # force model cache refresh
+uv run python -m llm_cmd <prompt>  # run without installing
+llm-cmd --list-models              # inspect model cache
+llm-cmd --update-models            # force model cache refresh
 ```
 
 ## Architecture
 
-Single-file implementation: `llm_cmd.py`
+Package: `llm_cmd/` (12 modules)
 
+| Module | Responsibility |
+|---|---|
+| `constants.py` | Provider env vars, XDG paths, MIME types, SSL context |
+| `config.py` | Load/save/resolve config file; `DEFAULT_MODEL` |
+| `db.py` | SQLite history + sessions + cost summary; `_UsageStats` dataclass |
+| `models.py` | Model cache (load, fetch, background refresh, modality filtering) |
+| `multimodal.py` | File encoding, image URL detection, user content builder |
+| `http_client.py` | `_make_request`, `call_llm_streaming`, `call_llm_capture` |
+| `execute.py` | `_strip_fences`, `_edit_in_editor`, `confirm_and_run` |
+| `cli.py` | `build_parser`, `get_content`, `_print_stats`, `_execute_prompt` |
+| `docs.py` | `_TLDR` and `_DOCS` strings |
+| `entry.py` | Entry points: `main`, `main_model`, `main_status`, `main_cost` |
+| `__init__.py` | Façade: re-exports public API for backward compat with tests |
+| `__main__.py` | `python -m llm_cmd` support |
+
+Key design rules:
+- **Patchable globals** (`_API_KEY`, `_API_URL`, `_MODELS_CACHE`, `_CONFIG_FILE`, `_CONFIG_DIR`, `_HISTORY_DB`, `_DATA_DIR`, `_CACHE_TTL`): live in `constants.py`. All functions that use them reference them via `from . import constants` + `constants._X` (module-qualified lookup), never `from .constants import _X`. This preserves test patchability at `llm_cmd.constants._X`.
 - **HTTP layer** (`_make_request`): direct `http.client` calls, zero third-party deps except `argcomplete`
 - **Streaming** (`call_llm_streaming`): SSE parsed line-by-line, tokens printed as received; returns `_UsageStats | None`
 - **Execute mode** (`confirm_and_run`): captures full response, strips markdown fences, prompts `[Y/n/e]` (Y is default)
@@ -53,8 +70,8 @@ Branch strategy: `main` = stable tagged releases, `dev/*` = feature branches, me
 ## Documentation rule
 
 **Every feature addition or behaviour change must update:**
-1. The `_TLDR` string in `llm_cmd.py` (quick reference)
-2. The `_DOCS` string in `llm_cmd.py` (man-page style)
+1. `_TLDR` in `llm_cmd/docs.py` (quick reference)
+2. `_DOCS` in `llm_cmd/docs.py` (man-page style)
 3. `README.md` (user-facing)
 4. `CLAUDE.md` Architecture section (this file)
 

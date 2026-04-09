@@ -79,7 +79,7 @@ export LLM_CMD_MODEL=gpt-4o-mini
 
 ```bash
 uv run pytest tests/ -v
-uv run llm_cmd.py <prompt>   # without installing
+uv run python -m llm_cmd <prompt>   # without installing
 ```
 
 ## Acknowledgements
