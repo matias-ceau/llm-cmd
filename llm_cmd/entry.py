@@ -92,11 +92,21 @@ def main() -> None:
         confirm_and_run(cmd, prompt_text)
     elif args.code:
         msgs = _build_messages(args.system or CODE_SYSTEM_PROMPT)
-        text, stats = call_llm_streaming(msgs, args.model, collect_usage=True)
+        text, stats = call_llm_streaming(
+            msgs,
+            args.model,
+            collect_usage=True,
+            render_markdown=False,
+        )
         _post(text, stats, "code")
     else:
         msgs = _build_messages(args.system)
-        text, stats = call_llm_streaming(msgs, args.model, collect_usage=True)
+        text, stats = call_llm_streaming(
+            msgs,
+            args.model,
+            collect_usage=True,
+            render_markdown=True,
+        )
         _post(text, stats, "chat")
 
 

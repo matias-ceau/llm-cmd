@@ -44,6 +44,8 @@ llm-cmd [-e] [-c] [-m MODEL] [-s SYSTEM] [words ...]
 | `--update-models` | Force-refresh model cache |
 | `--list-models` | Print cached model IDs |
 
+Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
+
 Stdin is also supported:
 
 ```bash

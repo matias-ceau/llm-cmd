@@ -424,6 +424,64 @@ class TestCallLlmStreaming:
         _, stats = llm_cmd.call_llm_streaming(self._msgs(), "m", collect_usage=False)
         assert stats is None
 
+    def test_markdown_rendering_adds_ansi_when_enabled(self, mock_http, capsys):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"# Heading\\nUse `code` and **bold**"}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        assert "\x1b[" in out
+        assert "Heading" in out
+        assert "code" in out
+        assert "bold" in out
+
+    def test_markdown_rendering_disabled_is_plain_text(self, mock_http, capsys):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"# Heading\\nUse `code`"}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=False)
+        out = capsys.readouterr().out
+        assert "\x1b[" not in out
+        assert "# Heading" in out
+
+    def test_markdown_rendering_handles_embedded_fences(self, mock_http, capsys):
+        content = (
+            "````markdown\n"
+            "```python\n"
+            "print('x')\n"
+            "```\n"
+            "````\n"
+            "plain\n"
+        )
+        lines = [
+            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        assert plain == content + "\n"
+
+    def test_markdown_fence_not_colored_as_code(self, mock_http, capsys):
+        content = "```md\n# title\n```\nplain\n"
+        lines = [
+            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        assert "\x1b[38;5;150m" not in out
+
 
 class TestCallLlmCapture:
     def _msgs(self):

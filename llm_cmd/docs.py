@@ -8,6 +8,7 @@ llm-cmd — quick reference
   llm-cmd -c write a merge sort        generate code to stdout
   llm-cmd -m anthropic/claude-3 ...    use a specific model
   llm-cmd -q ...                       suppress usage stats
+  NO_COLOR=1 llm-cmd ...               disable ANSI markdown styling
   llm-cmd -s myconv ask something      start or continue a named session
   llm-cmd -s auto ask something        auto-named session (name shown on stderr)
   llm-cmd -f what did I just ask       follow-up on last session
@@ -44,6 +45,8 @@ DESCRIPTION
     No quoting is needed — words on the command line are joined into the prompt.
     Files (images, PDFs, audio, video) are auto-detected by extension in the
     word list, or supplied explicitly with -i.
+    In chat mode on TTY output, markdown gets lightweight ANSI styling
+    (headings, inline/fenced code, bold) while preserving streaming behavior.
 
 OPTIONS
     words               Prompt words, joined with spaces. Files detected by
@@ -119,6 +122,7 @@ ENVIRONMENT
     LLM_CMD_API_KEY     API key (takes priority over OPENROUTER_API_KEY).
     LLM_CMD_API_URL     Full endpoint URL (default: OpenRouter).
     OPENROUTER_API_KEY  OpenRouter API key (fallback).
+    NO_COLOR            Disable ANSI markdown styling in streamed chat output.
     XDG_CACHE_HOME      Cache directory (default: ~/.cache).
     XDG_CONFIG_HOME     Config directory (default: ~/.config).
     XDG_DATA_HOME       Data directory (default: ~/.local/share).
