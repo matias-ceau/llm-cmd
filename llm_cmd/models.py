@@ -80,6 +80,30 @@ def _fetch_models() -> list[str]:
     return sorted(m["id"] for m in data.get("data", []))
 
 
+def _resolve_model_name(name: str) -> str:
+    """Resolve a partial/substring model name against the cache.
+
+    Returns the unique cached model id containing `name` (case-insensitive).
+    Falls back to `name` unchanged if it's already an exact match, the cache
+    is empty, or there's no match (e.g. a custom/uncached model). Exits with
+    an error if `name` matches more than one cached model.
+    """
+    models = _load_models()
+    if not name or not models or name in models:
+        return name
+    matches = [m for m in models if name.lower() in m.lower()]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        print(f"Error: '{name}' matches multiple cached models:", file=sys.stderr)
+        for m in matches[:10]:
+            print(f"  {m}", file=sys.stderr)
+        if len(matches) > 10:
+            print(f"  … and {len(matches) - 10} more.", file=sys.stderr)
+        sys.exit(1)
+    return name
+
+
 def _load_model_arch(model_id: str) -> dict:
     for m in _load_models_full():
         if m.get("id") == model_id:

@@ -18,6 +18,8 @@ llm-cmd — quick reference
   llm-cmd-model list --out audio       models that can generate audio
   llm-cmd-model get                    print current default model
   llm-cmd-model set openai/gpt-4o      set default model (saved to config)
+  llm-cmd-model set haiku              set by unique substring match
+  llm-cmd-model set                    pick a model interactively from the cache
   llm-cmd-status                       show current configuration
   llm-cmd-cost [--period 1d|7d|30d]    show cost summary
 
@@ -46,7 +48,8 @@ DESCRIPTION
     Files (images, PDFs, audio, video) are auto-detected by extension in the
     word list, or supplied explicitly with -i.
     In chat mode on TTY output, markdown gets lightweight ANSI styling
-    (headings, inline/fenced code, bold) while preserving streaming behavior.
+    (headings, inline/fenced code, bold, list items, blockquotes) while
+    preserving streaming behavior.
 
 OPTIONS
     words               Prompt words, joined with spaces. Files detected by
@@ -59,7 +62,9 @@ OPTIONS
 
     -c, --code          Code mode: generate raw code to stdout (no prose).
 
-    -m, --model MODEL   Model to use for this invocation.
+    -m, --model MODEL   Model to use for this invocation. MODEL may be a substring
+                        that uniquely matches a cached model id (e.g. "haiku");
+                        the resolved id is printed to stderr.
                         Default: $LLM_CMD_MODEL, config file, or openai/gpt-4o-mini.
 
     -S, --system PROMPT Override the system prompt.
@@ -91,7 +96,11 @@ SUBCOMMANDS
                         Valid modalities: text, image, audio, video, file.
 
     llm-cmd-model get   Print the current default model.
-    llm-cmd-model set MODEL  Set the default model (written to config file).
+    llm-cmd-model set [MODEL]
+                        Set the default model (written to config file). MODEL
+                        may be a substring that uniquely matches a cached model
+                        id. If MODEL is omitted, pick interactively from a
+                        numbered list of cached models.
 
     llm-cmd-status      Print current configuration: API URL, key, model,
                         paths to config, cache, and history database.

@@ -1,6 +1,7 @@
 import http.client
 import json
 import os
+import re
 import sys
 from urllib.parse import urlparse
 
@@ -47,6 +48,10 @@ class _MarkdownAnsiRenderer:
     _CODE = "\033[38;5;150m"
     _INLINE_CODE = "\033[38;5;214m"
     _BOLD = "\033[1m"
+    _LIST_MARKER = "\033[38;5;215m"
+    _BLOCKQUOTE = "\033[2;3m"
+
+    _LIST_RE = re.compile(r"\d+[.)](?= )")
 
     def __init__(self) -> None:
         self._carry = ""
@@ -58,6 +63,7 @@ class _MarkdownAnsiRenderer:
         self._fence_colored = False
         self._in_inline_code = False
         self._in_bold = False
+        self._in_blockquote = False
 
     def _render_text(self, text: str) -> str:
         out: list[str] = []
@@ -68,6 +74,9 @@ class _MarkdownAnsiRenderer:
                 if self._in_heading:
                     out.append(self._RESET)
                     self._in_heading = False
+                if self._in_blockquote:
+                    out.append(self._RESET)
+                    self._in_blockquote = False
                 out.append("\n")
                 self._line_start = True
                 self._line_leading_spaces = 0
@@ -119,6 +128,35 @@ class _MarkdownAnsiRenderer:
 
             if self._in_fenced_code:
                 out.append(ch)
+                self._line_start = False
+                self._line_leading_spaces = 4
+                i += 1
+                continue
+
+            if self._line_start and ch in "-*+" and text[i + 1:i + 2] == " ":
+                out.append(self._LIST_MARKER)
+                out.append(ch)
+                out.append(self._RESET)
+                self._line_start = False
+                self._line_leading_spaces = 4
+                i += 1
+                continue
+
+            if self._line_start and ch.isdigit():
+                m = self._LIST_RE.match(text, i)
+                if m:
+                    out.append(self._LIST_MARKER)
+                    out.append(m.group(0))
+                    out.append(self._RESET)
+                    self._line_start = False
+                    self._line_leading_spaces = 4
+                    i = m.end()
+                    continue
+
+            if self._line_start and ch == ">":
+                out.append(self._BLOCKQUOTE)
+                out.append(ch)
+                self._in_blockquote = True
                 self._line_start = False
                 self._line_leading_spaces = 4
                 i += 1
@@ -186,13 +224,17 @@ class _MarkdownAnsiRenderer:
     def finish(self) -> str:
         tail = self._render_text(self._carry)
         self._carry = ""
-        if self._in_heading or self._in_fenced_code or self._in_inline_code or self._in_bold:
+        if (
+            self._in_heading or self._in_fenced_code or self._in_inline_code
+            or self._in_bold or self._in_blockquote
+        ):
             self._in_heading = False
             self._in_fenced_code = False
             self._fence_ticks = 0
             self._fence_colored = False
             self._in_inline_code = False
             self._in_bold = False
+            self._in_blockquote = False
             return tail + self._RESET
         return tail
 
