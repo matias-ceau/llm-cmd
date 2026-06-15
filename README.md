@@ -39,12 +39,14 @@ llm-cmd [-e] [-c] [-m MODEL] [-s SYSTEM] [words ...]
 | *(none)* | Ask a question, stream the answer |
 | `-e` | Generate a shell command, confirm `[y/N/e]`, run it |
 | `-c` | Generate code, print to stdout |
-| `-m MODEL` | Override model (default: `openai/gpt-4o-mini`) |
+| `-m MODEL` | Override model (default: `openai/gpt-4o-mini`). MODEL may be a substring matching a single cached model, e.g. `-m haiku` |
 | `-s PROMPT` | Override system prompt |
 | `--update-models` | Force-refresh model cache |
 | `--list-models` | Print cached model IDs |
 
-Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
+Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold, list items, blockquotes) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
+
+Run `llm-cmd-model set` with no argument to pick a default model interactively from the cached list.
 
 Stdin is also supported:
 

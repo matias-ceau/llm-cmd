@@ -15,6 +15,7 @@ from .models import (
     _list_models_by_modality,
     _load_models,
     _maybe_update_models_bg,
+    _resolve_model_name,
 )
 
 
@@ -53,6 +54,11 @@ def main() -> None:
             sys.exit(1)
         print("\n".join(models))
         return
+
+    resolved_model = _resolve_model_name(args.model)
+    if resolved_model != args.model:
+        print(f"\033[2mModel: {resolved_model}\033[0m", file=sys.stderr)
+    args.model = resolved_model
 
     session_id, ctx_messages = _resolve_session(args.session, args.follow_up)
     user_content, detected_mods = get_content(args)
@@ -124,9 +130,18 @@ def main_model() -> None:
                         help="Comma-separated required output modalities (e.g. audio).")
 
     sub.add_parser("get",  help="Print the current default model.")
-    set_p = sub.add_parser("set", help="Set the default model.")
-    set_p.add_argument("model", help="Model ID to set as default.")
+    set_p = sub.add_parser(
+        "set", help="Set the default model (omit MODEL for an interactive picker)."
+    )
+    set_p.add_argument(
+        "model", nargs="?", default=None,
+        help="Model ID, or a substring matching exactly one cached model. "
+             "Omit to pick interactively from the cache.",
+    )
     args = parser.parse_args()
+
+    color = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+    marker = "\033[1;32m*\033[0m" if color else "*"
 
     if args.cmd == "list":
         in_mods  = [x.strip() for x in args.in_filter.split(",")]  if args.in_filter  else None
@@ -145,18 +160,41 @@ def main_model() -> None:
 
         current = _load_config().get("default_model") or DEFAULT_MODEL
         for m in models:
-            print(f"* {m}" if m == current else f"  {m}")
+            print(f"{marker} {m}" if m == current else f"  {m}")
 
     elif args.cmd == "get":
         cfg = _load_config()
         source = "config" if cfg.get("default_model") else "env/default"
-        print(f"{cfg.get('default_model') or DEFAULT_MODEL}  ({source})")
+        model = cfg.get("default_model") or DEFAULT_MODEL
+        name = f"\033[1m{model}\033[0m" if color else model
+        print(f"{name}  ({source})")
 
     elif args.cmd == "set":
+        model = args.model
+        if model is None:
+            models = _load_models()
+            if not models:
+                print("No cache — run: llm-cmd --update-models", file=sys.stderr)
+                sys.exit(1)
+            current = _load_config().get("default_model") or DEFAULT_MODEL
+            for i, m in enumerate(models, 1):
+                prefix = marker if m == current else " "
+                print(f"{prefix} {i:3d}  {m}")
+            try:
+                choice = input("Select model number or name: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nAborted.", file=sys.stderr)
+                sys.exit(0)
+            if choice.isdigit() and 1 <= int(choice) <= len(models):
+                model = models[int(choice) - 1]
+            else:
+                model = _resolve_model_name(choice)
+        else:
+            model = _resolve_model_name(model)
         cfg = _load_config()
-        cfg["default_model"] = args.model
+        cfg["default_model"] = model
         _save_config(cfg)
-        print(f"Default model set to: {args.model}")
+        print(f"Default model set to: {model}")
 
 
 def main_status() -> None:

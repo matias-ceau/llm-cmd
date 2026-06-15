@@ -27,6 +27,7 @@ from .models import (
     _load_models,
     _maybe_update_models_bg,
     _models_url,
+    _resolve_model_name,
 )
 from .multimodal import _build_user_content, _encode_file_content, _is_image_url
 from .http_client import _make_request, call_llm_capture, call_llm_streaming

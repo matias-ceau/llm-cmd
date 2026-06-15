@@ -17,6 +17,7 @@ from llm_cmd import (
     _load_models,
     _maybe_update_models_bg,
     _models_url,
+    _resolve_model_name,
     _strip_fences,
     build_parser,
     get_content,
@@ -251,6 +252,51 @@ class TestLoadModels:
             assert _load_models() == ["old/model"]
 
 
+# ── _resolve_model_name ───────────────────────────────────────────────────────
+
+class TestResolveModelName:
+    def _cache(self, tmp_path, ids):
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{"id": i} for i in ids]}))
+        return cache
+
+    def test_empty_cache_passthrough(self, tmp_path):
+        with patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "models.json"):
+            assert _resolve_model_name("haiku") == "haiku"
+
+    def test_exact_match_passthrough(self, tmp_path):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
+            assert _resolve_model_name("openai/gpt-4o") == "openai/gpt-4o"
+
+    def test_unique_substring_resolves(self, tmp_path):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
+            assert _resolve_model_name("haiku") == "anthropic/claude-3-5-haiku"
+
+    def test_no_match_passthrough(self, tmp_path):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
+            assert _resolve_model_name("mistral/mixtral") == "mistral/mixtral"
+
+    def test_ambiguous_match_exits(self, tmp_path, capsys):
+        cache = self._cache(tmp_path, [
+            "anthropic/claude-3-5-haiku", "anthropic/claude-3-opus", "openai/gpt-4o",
+        ])
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
+            with pytest.raises(SystemExit) as exc:
+                _resolve_model_name("claude")
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "anthropic/claude-3-5-haiku" in err
+        assert "anthropic/claude-3-opus" in err
+
+    def test_empty_name_passthrough(self, tmp_path):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku"])
+        with patch("llm_cmd.constants._MODELS_CACHE", cache):
+            assert _resolve_model_name("") == ""
+
+
 # ── _maybe_update_models_bg ───────────────────────────────────────────────────
 
 class TestMaybeUpdateModelsBg:
@@ -481,6 +527,52 @@ class TestCallLlmStreaming:
             llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
         out = capsys.readouterr().out
         assert "\x1b[38;5;150m" not in out
+
+    def test_markdown_rendering_styles_list_items(self, mock_http, capsys):
+        content = "- bullet one\n* bullet two\n+ bullet three\n1. numbered\n2) numbered\n"
+        lines = [
+            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        assert plain == content + "\n"
+        assert "\x1b[38;5;215m-" in out
+        assert "\x1b[38;5;215m*" in out
+        assert "\x1b[38;5;215m+" in out
+        assert "\x1b[38;5;215m1." in out
+        assert "\x1b[38;5;215m2)" in out
+
+    def test_markdown_rendering_styles_blockquote(self, mock_http, capsys):
+        content = "> quoted line\nplain line\n"
+        lines = [
+            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        assert plain == content + "\n"
+        assert "\x1b[2;3m>" in out
+
+    def test_markdown_rendering_bold_not_confused_with_list(self, mock_http, capsys):
+        content = "**bold** text\n"
+        lines = [
+            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("llm_cmd.http_client._use_markdown_rendering", return_value=True):
+            llm_cmd.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        assert plain == content + "\n"
+        assert "\x1b[38;5;215m" not in out
 
 
 class TestCallLlmCapture:
@@ -880,3 +972,84 @@ class TestModalitySupport:
         assert "text-only" not in img_models
         assert "audio-gen" in audio_out
         assert "text-only" not in audio_out
+
+
+# ── main_model ────────────────────────────────────────────────────────────────
+
+class TestMainModel:
+    def _cache(self, tmp_path, ids):
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{"id": i} for i in ids]}))
+        return cache
+
+    def test_set_with_exact_model(self, tmp_path, monkeypatch, capsys):
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "set", "openai/gpt-4o"])
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
+             patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "models.json"):
+            llm_cmd.main_model()
+        assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o"
+        assert "openai/gpt-4o" in capsys.readouterr().out
+
+    def test_set_with_unique_substring(self, tmp_path, monkeypatch, capsys):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "set", "haiku"])
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
+             patch("llm_cmd.constants._MODELS_CACHE", cache):
+            llm_cmd.main_model()
+        assert json.loads(cfg_file.read_text())["default_model"] == "anthropic/claude-3-5-haiku"
+
+    def test_set_interactive_by_index(self, tmp_path, monkeypatch, capsys):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "set"])
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
+             patch("llm_cmd.constants._MODELS_CACHE", cache), \
+             patch("builtins.input", return_value="2"):
+            llm_cmd.main_model()
+        assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o"
+
+    def test_set_interactive_by_name(self, tmp_path, monkeypatch, capsys):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "set"])
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
+             patch("llm_cmd.constants._MODELS_CACHE", cache), \
+             patch("builtins.input", return_value="haiku"):
+            llm_cmd.main_model()
+        assert json.loads(cfg_file.read_text())["default_model"] == "anthropic/claude-3-5-haiku"
+
+    def test_set_interactive_no_cache_errors(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "set"])
+        with patch("llm_cmd.constants._CONFIG_FILE", tmp_path / "config.json"), \
+             patch("llm_cmd.constants._MODELS_CACHE", tmp_path / "models.json"):
+            with pytest.raises(SystemExit) as exc:
+                llm_cmd.main_model()
+        assert exc.value.code == 1
+
+    def test_set_interactive_aborted_on_eof(self, tmp_path, monkeypatch, capsys):
+        cache = self._cache(tmp_path, ["openai/gpt-4o"])
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "set"])
+        with patch("llm_cmd.constants._CONFIG_FILE", tmp_path / "config.json"), \
+             patch("llm_cmd.constants._MODELS_CACHE", cache), \
+             patch("builtins.input", side_effect=EOFError):
+            with pytest.raises(SystemExit) as exc:
+                llm_cmd.main_model()
+        assert exc.value.code == 0
+
+    def test_list_marks_current_default(self, tmp_path, monkeypatch, capsys):
+        cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "openai/gpt-4o"}))
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "list"])
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._MODELS_CACHE", cache):
+            llm_cmd.main_model()
+        out = capsys.readouterr().out
+        assert "* " in out
+        assert "openai/gpt-4o" in out

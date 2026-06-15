@@ -56,10 +56,11 @@ Key design rules:
 - **Patchable globals** (`_API_KEY`, `_API_URL`, `_MODELS_CACHE`, `_CONFIG_FILE`, `_CONFIG_DIR`, `_HISTORY_DB`, `_DATA_DIR`, `_CACHE_TTL`): live in `constants.py`. All functions that use them reference them via `from . import constants` + `constants._X` (module-qualified lookup), never `from .constants import _X`. This preserves test patchability at `llm_cmd.constants._X`.
 - **HTTP layer** (`_make_request`): direct `http.client` calls, zero third-party deps except `argcomplete`
 - **Streaming** (`call_llm_streaming`): SSE parsed line-by-line, tokens printed as received; returns `_UsageStats | None`
-- **Markdown rendering**: chat streaming applies lightweight ANSI markdown styling on TTY (headings, inline/fenced code, bold) without buffering full responses; disabled by `NO_COLOR` or non-TTY output
+- **Markdown rendering**: chat streaming applies lightweight ANSI markdown styling on TTY (headings, inline/fenced code, bold, list items, blockquotes) without buffering full responses; disabled by `NO_COLOR` or non-TTY output
 - **Execute mode** (`confirm_and_run`): captures full response, strips markdown fences, prompts `[Y/n/e]` (Y is default)
 - **Edit mode**: `e` in confirm_and_run opens `$EDITOR` with the original prompt and proposed command as context (comment lines stripped on save)
 - **Model cache** (`~/.cache/llm-cmd/models.json`): loaded for tab-completion, refreshed every 12h via detached subprocess (`_maybe_update_models_bg`)
+- **Model name resolution** (`_resolve_model_name` in `models.py`): `-m/--model` and `llm-cmd-model set` accept a substring that uniquely matches a cached model id (e.g. `-m haiku`); ambiguous matches list candidates and exit, no match passes the name through unchanged. `llm-cmd-model set` with no argument shows a numbered picker over the cached models.
 - **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback
 - **History** (`~/.local/share/llm-cmd/history.db`): SQLite, one row per LLM call (timestamp, model, tokens, cost, mode)
 - **Usage stats**: printed to stderr after each response unless `-q/--quiet` or stdout not a TTY
