@@ -711,6 +711,24 @@ class TestConfig:
         with patch("llm_cmd.constants._CONFIG_FILE", tmp_path / "missing.json"):
             assert llm_cmd._resolve_default_model() == "openai/gpt-4o-mini"
 
+    def test_ensure_config_creates_file(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
+        cfg_file = tmp_path / "config.json"
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
+            cfg = llm_cmd._ensure_config()
+        assert cfg_file.exists()
+        assert cfg["default_model"] == "openai/gpt-4o-mini"
+        assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o-mini"
+
+    def test_ensure_config_leaves_existing_file_untouched(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "custom/model"}))
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
+            cfg = llm_cmd._ensure_config()
+        assert cfg == {"default_model": "custom/model"}
+
 
 # ── History / SQLite ──────────────────────────────────────────────────────────
 
@@ -1053,3 +1071,13 @@ class TestMainModel:
         out = capsys.readouterr().out
         assert "* " in out
         assert "openai/gpt-4o" in out
+
+    def test_edit_opens_editor(self, tmp_path, monkeypatch):
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "edit"])
+        monkeypatch.setenv("EDITOR", "myeditor")
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
+             patch("os.system") as mock_system:
+            llm_cmd.main_model()
+        mock_system.assert_called_once_with(f"myeditor {cfg_file}")

@@ -46,7 +46,7 @@ llm-cmd [-e] [-c] [-m MODEL] [-s SYSTEM] [words ...]
 
 Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold, list items, blockquotes) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
 
-Run `llm-cmd-model set` with no argument to pick a default model interactively from the cached list.
+Run `llm-cmd-model set` with no argument to pick a default model interactively from the cached list. Run `llm-cmd-model edit` to open the config file directly in `$EDITOR`.
 
 Stdin is also supported:
 
@@ -56,12 +56,20 @@ cat error.log | llm-cmd explain this error
 
 ## Configuration
 
-All config via environment variables — no config file needed.
+`llm-cmd` keeps a persistent config file at `~/.config/llm-cmd/config.json`, created automatically on first run. Edit it in place with any text editor, or interactively:
+
+```bash
+llm-cmd-model set            # pick a default model interactively
+llm-cmd-model set haiku      # set by substring match
+llm-cmd-model edit           # open config.json in $EDITOR
+```
+
+Environment variables always take priority over the config file:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | — | API key (required unless `LLM_CMD_API_KEY` set) |
-| `LLM_CMD_MODEL` | `openai/gpt-4o-mini` | Default model |
+| `LLM_CMD_MODEL` | config file, or `openai/gpt-4o-mini` | Default model |
 | `LLM_CMD_API_KEY` | `$OPENROUTER_API_KEY` | Override API key |
 | `LLM_CMD_API_URL` | OpenRouter endpoint | Any OpenAI-compatible URL |
 

@@ -20,6 +20,7 @@ llm-cmd — quick reference
   llm-cmd-model set openai/gpt-4o      set default model (saved to config)
   llm-cmd-model set haiku              set by unique substring match
   llm-cmd-model set                    pick a model interactively from the cache
+  llm-cmd-model edit                   open ~/.config/llm-cmd/config.json in $EDITOR
   llm-cmd-status                       show current configuration
   llm-cmd-cost [--period 1d|7d|30d]    show cost summary
 
@@ -38,7 +39,7 @@ SYNOPSIS
     llm-cmd [-e|-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
     llm-cmd --update-models | --list-models | --tldr | --docs
     llm-cmd-model list [--in MODALITIES] [--out MODALITIES]
-    llm-cmd-model get | set MODEL
+    llm-cmd-model get | set MODEL | edit
     llm-cmd-status
     llm-cmd-cost [--period PERIOD]
 
@@ -101,6 +102,7 @@ SUBCOMMANDS
                         may be a substring that uniquely matches a cached model
                         id. If MODEL is omitted, pick interactively from a
                         numbered list of cached models.
+    llm-cmd-model edit  Open the config file directly in $EDITOR.
 
     llm-cmd-status      Print current configuration: API URL, key, model,
                         paths to config, cache, and history database.
@@ -140,6 +142,8 @@ ENVIRONMENT
 
 FILES
     ~/.config/llm-cmd/config.json       Persistent config (default model).
+                                         Auto-created on first run; edit it
+                                         directly or via `llm-cmd-model edit`.
     ~/.cache/llm-cmd/models.json        Cached model list (12h TTL).
     ~/.local/share/llm-cmd/history.db   Usage history + sessions (SQLite).
 

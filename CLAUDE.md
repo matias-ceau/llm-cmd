@@ -61,7 +61,7 @@ Key design rules:
 - **Edit mode**: `e` in confirm_and_run opens `$EDITOR` with the original prompt and proposed command as context (comment lines stripped on save)
 - **Model cache** (`~/.cache/llm-cmd/models.json`): loaded for tab-completion, refreshed every 12h via detached subprocess (`_maybe_update_models_bg`)
 - **Model name resolution** (`_resolve_model_name` in `models.py`): `-m/--model` and `llm-cmd-model set` accept a substring that uniquely matches a cached model id (e.g. `-m haiku`); ambiguous matches list candidates and exit, no match passes the name through unchanged. `llm-cmd-model set` with no argument shows a numbered picker over the cached models.
-- **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback
+- **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback. Auto-created with current defaults on first run (`_ensure_config` in `config.py`, called from `main`/`main_model`/`main_status`) so the file always exists and can be hand-edited in place; `llm-cmd-model edit` opens it in `$EDITOR`
 - **History** (`~/.local/share/llm-cmd/history.db`): SQLite, one row per LLM call (timestamp, model, tokens, cost, mode)
 - **Usage stats**: printed to stderr after each response unless `-q/--quiet` or stdout not a TTY
 - **Provider config**: resolved at module level from env vars — changing provider requires no code changes
