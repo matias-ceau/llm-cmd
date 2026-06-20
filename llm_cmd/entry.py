@@ -6,6 +6,7 @@ from . import constants
 from .cli import _execute_prompt, _print_stats, build_parser, get_content
 from .config import DEFAULT_MODEL, _ensure_config, _load_config, _resolve_default_model, _save_config
 from .constants import CODE_SYSTEM_PROMPT
+from .context import _machine_context
 from .db import _record_message, _record_usage, _resolve_session
 from .execute import confirm_and_run
 from .http_client import call_llm_capture, call_llm_streaming
@@ -76,6 +77,11 @@ def main() -> None:
 
     show_stats = not args.quiet and sys.stdout.isatty()
 
+    def _default_system(mode_specific: str | None) -> str | None:
+        cfg = _load_config()
+        parts = [p for p in (mode_specific, _machine_context(), cfg.get("system_prompt")) if p]
+        return "\n\n".join(parts) if parts else None
+
     def _build_messages(system: str | None) -> list[dict]:
         msgs = list(ctx_messages)
         if system:
@@ -93,12 +99,12 @@ def main() -> None:
             _record_message(session_id, "assistant", response_text,   args.model,  stats, mode)
 
     if args.execute:
-        msgs = _build_messages(args.system or _execute_prompt())
+        msgs = _build_messages(args.system or _default_system(_execute_prompt()))
         cmd, stats = call_llm_capture(msgs, args.model)
         _post(cmd, stats, "execute")
         confirm_and_run(cmd, prompt_text)
     elif args.code:
-        msgs = _build_messages(args.system or CODE_SYSTEM_PROMPT)
+        msgs = _build_messages(args.system or _default_system(CODE_SYSTEM_PROMPT))
         text, stats = call_llm_streaming(
             msgs,
             args.model,
@@ -107,7 +113,7 @@ def main() -> None:
         )
         _post(text, stats, "code")
     else:
-        msgs = _build_messages(args.system)
+        msgs = _build_messages(args.system or _default_system(None))
         text, stats = call_llm_streaming(
             msgs,
             args.model,
@@ -218,6 +224,8 @@ def main_status() -> None:
     print(f"api_key       : {constants._API_KEY or '(not set)'}")
     print(f"models cached : {n_models} models  ({constants._MODELS_CACHE})")
     print(f"config file   : {constants._CONFIG_FILE}  ({'exists' if constants._CONFIG_FILE.exists() else 'not created'})")
+    print(f"system_prompt : {cfg.get('system_prompt') or '(none)'}")
+    print(f"machine ctx   : {_machine_context()}")
     print(f"history db    : {constants._HISTORY_DB}  ({'exists' if constants._HISTORY_DB.exists() else 'not created'})")
 
 

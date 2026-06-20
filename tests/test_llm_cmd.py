@@ -730,6 +730,27 @@ class TestConfig:
         assert cfg == {"default_model": "custom/model"}
 
 
+# ── Machine context ───────────────────────────────────────────────────────────
+
+class TestMachineContext:
+    def test_includes_os_and_shell(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/bin/fish")
+        ctx = llm_cmd._machine_context()
+        assert "shell=fish" in ctx
+        assert "OS=" in ctx
+        assert "arch=" in ctx
+
+    def test_reads_distro_from_os_release(self, tmp_path, monkeypatch):
+        os_release = tmp_path / "os-release"
+        os_release.write_text('NAME="Arch Linux"\nPRETTY_NAME="Arch Linux"\n')
+        with patch("llm_cmd.context._OS_RELEASE", os_release):
+            assert llm_cmd.context._linux_distro() == "Arch Linux"
+
+    def test_no_distro_file_returns_none(self, tmp_path):
+        with patch("llm_cmd.context._OS_RELEASE", tmp_path / "missing"):
+            assert llm_cmd.context._linux_distro() is None
+
+
 # ── History / SQLite ──────────────────────────────────────────────────────────
 
 class TestHistory:

@@ -35,12 +35,13 @@ llm-cmd --update-models            # force model cache refresh
 
 ## Architecture
 
-Package: `llm_cmd/` (12 modules)
+Package: `llm_cmd/` (13 modules)
 
 | Module | Responsibility |
 |---|---|
 | `constants.py` | Provider env vars, XDG paths, MIME types, SSL context |
 | `config.py` | Load/save/resolve config file; `DEFAULT_MODEL` |
+| `context.py` | `_machine_context` — OS/distro/shell/arch, computed fresh per call |
 | `db.py` | SQLite history + sessions + cost summary; `_UsageStats` dataclass |
 | `models.py` | Model cache (load, fetch, background refresh, modality filtering) |
 | `multimodal.py` | File encoding, image URL detection, user content builder |
@@ -62,6 +63,7 @@ Key design rules:
 - **Model cache** (`~/.cache/llm-cmd/models.json`): loaded for tab-completion, refreshed every 12h via detached subprocess (`_maybe_update_models_bg`)
 - **Model name resolution** (`_resolve_model_name` in `models.py`): `-m/--model` and `llm-cmd-model set` accept a substring that uniquely matches a cached model id (e.g. `-m haiku`); ambiguous matches list candidates and exit, no match passes the name through unchanged. `llm-cmd-model set` with no argument shows a numbered picker over the cached models.
 - **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback. Auto-created with current defaults on first run (`_ensure_config` in `config.py`, called from `main`/`main_model`/`main_status`) so the file always exists and can be hand-edited in place; `llm-cmd-model edit` opens it in `$EDITOR`
+- **System prompt injection** (`_default_system` in `entry.py`): unless `-S` fully overrides it, every call's system prompt is built from mode-specific instructions (execute/code) + `_machine_context()` (recomputed every call — never cached/stored, so one config.json stays correct across different machines) + the optional `system_prompt` key from config.json (free-text standing instructions/preferences)
 - **History** (`~/.local/share/llm-cmd/history.db`): SQLite, one row per LLM call (timestamp, model, tokens, cost, mode)
 - **Usage stats**: printed to stderr after each response unless `-q/--quiet` or stdout not a TTY
 - **Provider config**: resolved at module level from env vars — changing provider requires no code changes

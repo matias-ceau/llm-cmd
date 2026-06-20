@@ -21,7 +21,8 @@ llm-cmd — quick reference
   llm-cmd-model set haiku              set by unique substring match
   llm-cmd-model set                    pick a model interactively from the cache
   llm-cmd-model edit                   open ~/.config/llm-cmd/config.json in $EDITOR
-  llm-cmd-status                       show current configuration
+                                        (add "system_prompt" for standing instructions)
+  llm-cmd-status                       show current configuration + machine context
   llm-cmd-cost [--period 1d|7d|30d]    show cost summary
 
   llm-cmd --update-models              refresh model cache from provider
@@ -68,7 +69,9 @@ OPTIONS
                         the resolved id is printed to stderr.
                         Default: $LLM_CMD_MODEL, config file, or openai/gpt-4o-mini.
 
-    -S, --system PROMPT Override the system prompt.
+    -S, --system PROMPT Fully override the system prompt (skips machine context
+                        and config "system_prompt" injection — use this for a
+                        one-off, exact system message).
 
     -s, --session NAME  Attach to a named session. Use 'auto' to generate a
                         timestamped name (printed to stderr for reuse).
@@ -140,10 +143,25 @@ ENVIRONMENT
     EDITOR              Editor for -e edit mode (default: vi).
     SHELL               Shell name used in execute-mode system prompt.
 
+CONTEXT INJECTION
+    Unless -S/--system fully overrides it, every request's system prompt is
+    built from up to three parts, in order:
+      1. mode-specific instructions (execute/code mode only)
+      2. machine context — OS/distro, $SHELL, architecture — computed fresh
+         on every call, so the same config.json works correctly across
+         different machines without editing it per host
+      3. the "system_prompt" key from config.json, if set — free-text
+         instructions/preferences that should apply to every call (e.g.
+         "prefer pacman over apt-get", "I use zsh and neovim")
+
+    Set persistent instructions with:
+        llm-cmd-model edit          # add "system_prompt": "..." to config.json
+
 FILES
-    ~/.config/llm-cmd/config.json       Persistent config (default model).
-                                         Auto-created on first run; edit it
-                                         directly or via `llm-cmd-model edit`.
+    ~/.config/llm-cmd/config.json       Persistent config: default_model,
+                                         system_prompt. Auto-created on first
+                                         run; edit it directly or via
+                                         `llm-cmd-model edit`.
     ~/.cache/llm-cmd/models.json        Cached model list (12h TTL).
     ~/.local/share/llm-cmd/history.db   Usage history + sessions (SQLite).
 

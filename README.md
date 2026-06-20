@@ -73,6 +73,20 @@ Environment variables always take priority over the config file:
 | `LLM_CMD_API_KEY` | `$OPENROUTER_API_KEY` | Override API key |
 | `LLM_CMD_API_URL` | OpenRouter endpoint | Any OpenAI-compatible URL |
 
+### Persistent instructions + machine context
+
+Every request (unless `-S` fully overrides the system prompt) automatically gets:
+
+1. mode-specific instructions (execute/code mode)
+2. **machine context** — OS/distro, `$SHELL`, architecture — detected fresh on every call, so the same `config.json` is correct whether it's synced to an Arch box or a Mac. No more reminding the model what OS you're on.
+3. a free-text `"system_prompt"` from `config.json`, if you set one — standing instructions/preferences applied to every call:
+
+```bash
+llm-cmd-model edit
+# add to config.json:
+# { "default_model": "...", "system_prompt": "Prefer pacman over apt-get. I use zsh and neovim." }
+```
+
 ### Provider examples
 
 ```bash
