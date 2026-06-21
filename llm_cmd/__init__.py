@@ -10,7 +10,8 @@ from .constants import (
     _HISTORY_DB,
     _MODELS_CACHE,
 )
-from .config import DEFAULT_MODEL, _load_config, _resolve_default_model, _save_config
+from .config import DEFAULT_MODEL, _ensure_config, _load_config, _resolve_default_model, _save_config
+from .context import _machine_context
 from .db import (
     _UsageStats,
     _cost_summary,

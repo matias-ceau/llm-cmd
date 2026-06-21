@@ -20,7 +20,9 @@ llm-cmd — quick reference
   llm-cmd-model set openai/gpt-4o      set default model (saved to config)
   llm-cmd-model set haiku              set by unique substring match
   llm-cmd-model set                    pick a model interactively from the cache
-  llm-cmd-status                       show current configuration
+  llm-cmd-model edit                   open ~/.config/llm-cmd/config.json in $EDITOR
+                                        (add "system_prompt" for standing instructions)
+  llm-cmd-status                       show current configuration + machine context
   llm-cmd-cost [--period 1d|7d|30d]    show cost summary
 
   llm-cmd --update-models              refresh model cache from provider
@@ -38,7 +40,7 @@ SYNOPSIS
     llm-cmd [-e|-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
     llm-cmd --update-models | --list-models | --tldr | --docs
     llm-cmd-model list [--in MODALITIES] [--out MODALITIES]
-    llm-cmd-model get | set MODEL
+    llm-cmd-model get | set MODEL | edit
     llm-cmd-status
     llm-cmd-cost [--period PERIOD]
 
@@ -67,7 +69,9 @@ OPTIONS
                         the resolved id is printed to stderr.
                         Default: $LLM_CMD_MODEL, config file, or openai/gpt-4o-mini.
 
-    -S, --system PROMPT Override the system prompt.
+    -S, --system PROMPT Fully override the system prompt (skips machine context
+                        and config "system_prompt" injection — use this for a
+                        one-off, exact system message).
 
     -s, --session NAME  Attach to a named session. Use 'auto' to generate a
                         timestamped name (printed to stderr for reuse).
@@ -101,6 +105,7 @@ SUBCOMMANDS
                         may be a substring that uniquely matches a cached model
                         id. If MODEL is omitted, pick interactively from a
                         numbered list of cached models.
+    llm-cmd-model edit  Open the config file directly in $EDITOR.
 
     llm-cmd-status      Print current configuration: API URL, key, model,
                         paths to config, cache, and history database.
@@ -138,8 +143,25 @@ ENVIRONMENT
     EDITOR              Editor for -e edit mode (default: vi).
     SHELL               Shell name used in execute-mode system prompt.
 
+CONTEXT INJECTION
+    Unless -S/--system fully overrides it, every request's system prompt is
+    built from up to three parts, in order:
+      1. mode-specific instructions (execute/code mode only)
+      2. machine context — OS/distro, $SHELL, architecture — computed fresh
+         on every call, so the same config.json works correctly across
+         different machines without editing it per host
+      3. the "system_prompt" key from config.json, if set — free-text
+         instructions/preferences that should apply to every call (e.g.
+         "prefer pacman over apt-get", "I use zsh and neovim")
+
+    Set persistent instructions with:
+        llm-cmd-model edit          # add "system_prompt": "..." to config.json
+
 FILES
-    ~/.config/llm-cmd/config.json       Persistent config (default model).
+    ~/.config/llm-cmd/config.json       Persistent config: default_model,
+                                         system_prompt. Auto-created on first
+                                         run; edit it directly or via
+                                         `llm-cmd-model edit`.
     ~/.cache/llm-cmd/models.json        Cached model list (12h TTL).
     ~/.local/share/llm-cmd/history.db   Usage history + sessions (SQLite).
 

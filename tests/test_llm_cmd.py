@@ -711,6 +711,45 @@ class TestConfig:
         with patch("llm_cmd.constants._CONFIG_FILE", tmp_path / "missing.json"):
             assert llm_cmd._resolve_default_model() == "openai/gpt-4o-mini"
 
+    def test_ensure_config_creates_file(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
+        cfg_file = tmp_path / "config.json"
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
+            cfg = llm_cmd._ensure_config()
+        assert cfg_file.exists()
+        assert cfg["default_model"] == "openai/gpt-4o-mini"
+        assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o-mini"
+
+    def test_ensure_config_leaves_existing_file_untouched(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "custom/model"}))
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
+            cfg = llm_cmd._ensure_config()
+        assert cfg == {"default_model": "custom/model"}
+
+
+# ── Machine context ───────────────────────────────────────────────────────────
+
+class TestMachineContext:
+    def test_includes_os_and_shell(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/bin/fish")
+        ctx = llm_cmd._machine_context()
+        assert "shell=fish" in ctx
+        assert "OS=" in ctx
+        assert "arch=" in ctx
+
+    def test_reads_distro_from_os_release(self, tmp_path, monkeypatch):
+        os_release = tmp_path / "os-release"
+        os_release.write_text('NAME="Arch Linux"\nPRETTY_NAME="Arch Linux"\n')
+        with patch("llm_cmd.context._OS_RELEASE", os_release):
+            assert llm_cmd.context._linux_distro() == "Arch Linux"
+
+    def test_no_distro_file_returns_none(self, tmp_path):
+        with patch("llm_cmd.context._OS_RELEASE", tmp_path / "missing"):
+            assert llm_cmd.context._linux_distro() is None
+
 
 # ── History / SQLite ──────────────────────────────────────────────────────────
 
@@ -1053,3 +1092,13 @@ class TestMainModel:
         out = capsys.readouterr().out
         assert "* " in out
         assert "openai/gpt-4o" in out
+
+    def test_edit_opens_editor(self, tmp_path, monkeypatch):
+        cfg_file = tmp_path / "config.json"
+        monkeypatch.setattr("sys.argv", ["llm-cmd-model", "edit"])
+        monkeypatch.setenv("EDITOR", "myeditor")
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
+             patch("os.system") as mock_system:
+            llm_cmd.main_model()
+        mock_system.assert_called_once_with(f"myeditor {cfg_file}")
