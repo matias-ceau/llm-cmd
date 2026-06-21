@@ -25,7 +25,7 @@ def _ensure_config() -> dict:
     always exists on disk and can be hand-edited in place."""
     cfg = _load_config()
     if not constants._CONFIG_FILE.exists():
-        cfg.setdefault("default_model", os.environ.get("LLM_CMD_MODEL") or _HARDCODED_DEFAULT_MODEL)
+        cfg.setdefault("default_model", _HARDCODED_DEFAULT_MODEL)
         _save_config(cfg)
     return cfg
 
