@@ -21,11 +21,12 @@ def _save_config(data: dict) -> None:
 
 
 def _ensure_config() -> dict:
-    """Create the config file with current defaults on first run, so it
-    always exists on disk and can be hand-edited in place."""
+    """Create the config file on first run (empty, or with whatever keys
+    already exist) so it always exists on disk and can be hand-edited in
+    place. Does not seed default_model — that would persist a one-off
+    LLM_CMD_MODEL override or mask it from later env-aware reads."""
     cfg = _load_config()
     if not constants._CONFIG_FILE.exists():
-        cfg.setdefault("default_model", os.environ.get("LLM_CMD_MODEL") or _HARDCODED_DEFAULT_MODEL)
         _save_config(cfg)
     return cfg
 
