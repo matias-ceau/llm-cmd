@@ -4,7 +4,7 @@ import sys
 
 from . import constants
 from .cli import _execute_prompt, _print_stats, build_parser, get_content
-from .config import DEFAULT_MODEL, _ensure_config, _load_config, _resolve_default_model, _save_config
+from .config import _ensure_config, _load_config, _resolve_default_model, _save_config
 from .constants import CODE_SYSTEM_PROMPT
 from .context import _machine_context
 from .db import _record_message, _record_usage, _resolve_session
@@ -168,14 +168,16 @@ def main_model() -> None:
                 print("No cache — run: llm-cmd --update-models", file=sys.stderr)
                 sys.exit(1)
 
-        current = _load_config().get("default_model") or DEFAULT_MODEL
+        current = _resolve_default_model()
         for m in models:
             print(f"{marker} {m}" if m == current else f"  {m}")
 
     elif args.cmd == "get":
         cfg = _load_config()
-        source = "config" if cfg.get("default_model") else "env/default"
-        model = cfg.get("default_model") or DEFAULT_MODEL
+        source = "config" if cfg.get("default_model") else (
+            "env" if os.environ.get("LLM_CMD_MODEL") else "default"
+        )
+        model = _resolve_default_model()
         name = f"\033[1m{model}\033[0m" if color else model
         print(f"{name}  ({source})")
 
@@ -186,7 +188,7 @@ def main_model() -> None:
             if not models:
                 print("No cache — run: llm-cmd --update-models", file=sys.stderr)
                 sys.exit(1)
-            current = _load_config().get("default_model") or DEFAULT_MODEL
+            current = _resolve_default_model()
             for i, m in enumerate(models, 1):
                 prefix = marker if m == current else " "
                 print(f"{prefix} {i:3d}  {m}")
@@ -214,7 +216,7 @@ def main_model() -> None:
 def main_status() -> None:
     _ensure_config()
     cfg = _load_config()
-    model = cfg.get("default_model") or DEFAULT_MODEL
+    model = _resolve_default_model()
     model_source = "config" if cfg.get("default_model") else (
         "env" if os.environ.get("LLM_CMD_MODEL") else "default"
     )

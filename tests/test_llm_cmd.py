@@ -718,8 +718,8 @@ class TestConfig:
              patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
             cfg = llm_cmd._ensure_config()
         assert cfg_file.exists()
-        assert cfg["default_model"] == "openai/gpt-4o-mini"
-        assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o-mini"
+        assert "default_model" not in cfg
+        assert json.loads(cfg_file.read_text()) == {}
 
     def test_ensure_config_does_not_persist_env_override(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LLM_CMD_MODEL", "temp/one-off-model")
@@ -727,7 +727,15 @@ class TestConfig:
         with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
              patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
             llm_cmd._ensure_config()
-        assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o-mini"
+        assert "default_model" not in json.loads(cfg_file.read_text())
+
+    def test_ensure_config_does_not_mask_env_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("LLM_CMD_MODEL", "temp/one-off-model")
+        cfg_file = tmp_path / "config.json"
+        with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
+             patch("llm_cmd.constants._CONFIG_DIR", tmp_path):
+            llm_cmd._ensure_config()
+            assert llm_cmd._resolve_default_model() == "temp/one-off-model"
 
     def test_ensure_config_leaves_existing_file_untouched(self, tmp_path):
         cfg_file = tmp_path / "config.json"
