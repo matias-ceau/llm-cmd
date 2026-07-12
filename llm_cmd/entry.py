@@ -83,9 +83,10 @@ def main() -> None:
         return "\n\n".join(parts) if parts else None
 
     def _build_messages(system: str | None) -> list[dict]:
-        msgs = list(ctx_messages)
+        msgs = []
         if system:
             msgs.append({"role": "system", "content": system})
+        msgs.extend(ctx_messages)
         msgs.append({"role": "user", "content": user_content})
         return msgs
 
