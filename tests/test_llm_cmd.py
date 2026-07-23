@@ -763,11 +763,25 @@ class TestEditInEditor:
             mock_ntf.return_value.__enter__ = lambda s: s
             mock_ntf.return_value.__exit__ = lambda *a: False
             mock_ntf.return_value.name = str(tmpfile)
-            with patch("os.system"):
+            with patch("llm_cmd.execute.subprocess.run") as run:
                 with patch("os.unlink"):
                     result = llm_cmd._edit_in_editor("ls -la", "test")
+        run.assert_called_once_with(["true", str(tmpfile)])
         assert "#" not in result
         assert "ls -la" in result
+
+    def test_editor_with_flags_split_correctly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EDITOR", "code --wait")
+        with patch("tempfile.NamedTemporaryFile") as mock_ntf:
+            tmpfile = tmp_path / "cmd.sh"
+            tmpfile.write_text("ls\n")
+            mock_ntf.return_value.__enter__ = lambda s: s
+            mock_ntf.return_value.__exit__ = lambda *a: False
+            mock_ntf.return_value.name = str(tmpfile)
+            with patch("llm_cmd.execute.subprocess.run") as run:
+                with patch("os.unlink"):
+                    llm_cmd._edit_in_editor("ls", "test")
+        run.assert_called_once_with(["code", "--wait", str(tmpfile)])
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -1214,6 +1228,24 @@ class TestMainModel:
         monkeypatch.setenv("EDITOR", "myeditor")
         with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
              patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
-             patch("os.system") as mock_system:
+             patch("subprocess.run") as run:
             llm_cmd.main_model()
-        mock_system.assert_called_once_with(f"myeditor {cfg_file}")
+        run.assert_called_once_with(["myeditor", str(cfg_file)])
+
+
+class TestAtomicWrite:
+    def test_writes_content(self, tmp_path):
+        target = tmp_path / "out.json"
+        llm_cmd.constants._atomic_write_text(target, '{"a": 1}')
+        assert target.read_text() == '{"a": 1}'
+
+    def test_overwrites_existing(self, tmp_path):
+        target = tmp_path / "out.json"
+        target.write_text("old")
+        llm_cmd.constants._atomic_write_text(target, "new")
+        assert target.read_text() == "new"
+
+    def test_no_leftover_temp_file(self, tmp_path):
+        target = tmp_path / "out.json"
+        llm_cmd.constants._atomic_write_text(target, "x")
+        assert [p.name for p in tmp_path.iterdir()] == ["out.json"]

@@ -80,7 +80,7 @@ def _fetch_models() -> list[str]:
         print("Error: invalid JSON in models response.", file=sys.stderr)
         return []
     constants._CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    constants._MODELS_CACHE.write_text(json.dumps(data))
+    constants._atomic_write_text(constants._MODELS_CACHE, json.dumps(data))
     return sorted(m["id"] for m in data.get("data", []))
 
 

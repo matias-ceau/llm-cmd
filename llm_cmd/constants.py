@@ -27,6 +27,13 @@ _HISTORY_DB   = _DATA_DIR   / "history.db"
 _CACHE_TTL = 43200
 _SSL_CTX   = ssl.create_default_context()
 
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via temp file + rename so concurrent readers never see partial content."""
+    tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
 # Multimodal file extension → MIME type
 _MEDIA_EXTENSIONS: dict[str, str] = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",

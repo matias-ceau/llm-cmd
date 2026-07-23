@@ -17,7 +17,7 @@ def _load_config() -> dict:
 
 def _save_config(data: dict) -> None:
     constants._CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    constants._CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
+    constants._atomic_write_text(constants._CONFIG_FILE, json.dumps(data, indent=2) + "\n")
 
 
 def _ensure_config() -> dict:

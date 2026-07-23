@@ -210,8 +210,10 @@ def main_model() -> None:
         print(f"Default model set to: {model}")
 
     elif args.cmd == "edit":
+        import shlex
+        import subprocess
         editor = os.environ.get("EDITOR", "vi")
-        os.system(f"{editor} {constants._CONFIG_FILE}")
+        subprocess.run([*shlex.split(editor), str(constants._CONFIG_FILE)])
 
 
 def main_status() -> None:

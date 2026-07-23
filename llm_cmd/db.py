@@ -17,7 +17,8 @@ class _UsageStats:
 
 def _db_conn() -> sqlite3.Connection:
     constants._DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(constants._HISTORY_DB)
+    conn = sqlite3.connect(constants._HISTORY_DB, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS history (
             ts                REAL    NOT NULL,
