@@ -3,10 +3,49 @@ import json
 import os
 import re
 import sys
+import time
 from urllib.parse import urlparse
 
 from . import constants
 from .db import _UsageStats
+
+_RETRIABLE_STATUSES = {429, 500, 502, 503, 529}
+_RETRY_WAITS = (1, 2, 4)  # seconds between attempts (4 attempts total)
+
+
+def _open_connection(parsed) -> http.client.HTTPConnection:
+    if parsed.scheme == "http":
+        return http.client.HTTPConnection(parsed.netloc, timeout=30)
+    return http.client.HTTPSConnection(parsed.netloc, context=constants._SSL_CTX, timeout=30)
+
+
+def _post_json(url: str, body: str, api_key: str) -> http.client.HTTPResponse:
+    """POST with retry/backoff on connection errors and transient HTTP statuses."""
+    parsed = urlparse(url)
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    last_error = ""
+    for attempt, wait in enumerate((*_RETRY_WAITS, None)):
+        try:
+            conn = _open_connection(parsed)
+            conn.request("POST", parsed.path, body, headers)
+            resp = conn.getresponse()
+        except OSError as e:
+            last_error = f"Connection error: {e}"
+            resp = None
+        if resp is not None:
+            if resp.status == 200:
+                return resp
+            detail = resp.read().decode(errors="replace")
+            last_error = f"API error {resp.status}: {detail}"
+            if resp.status not in _RETRIABLE_STATUSES:
+                break
+        if wait is None:
+            break
+        print(f"\033[2m  retrying in {wait}s… ({last_error.splitlines()[0]})\033[0m", file=sys.stderr)
+        time.sleep(wait)
+    raise ConnectionError(last_error)
 
 
 def _make_request(
@@ -19,27 +58,16 @@ def _make_request(
         print("Error: no API key. Set LLM_CMD_API_KEY or OPENROUTER_API_KEY.", file=sys.stderr)
         sys.exit(1)
 
-    parsed = urlparse(constants._API_URL)
-    conn = http.client.HTTPSConnection(parsed.netloc, context=constants._SSL_CTX, timeout=30)
-
     body_dict: dict = {"model": model, "messages": messages, "stream": stream}
     if stream and include_usage:
         body_dict["stream_options"] = {"include_usage": True}
     body = json.dumps(body_dict)
 
     try:
-        conn.request("POST", parsed.path, body, {
-            "Authorization": f"Bearer {constants._API_KEY}",
-            "Content-Type": "application/json",
-        })
-        resp = conn.getresponse()
-    except OSError as e:
-        print(f"Connection error: {e}", file=sys.stderr)
+        return _post_json(constants._API_URL, body, constants._API_KEY)
+    except ConnectionError as e:
+        print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
-    if resp.status != 200:
-        print(f"API error {resp.status}: {resp.read().decode()}", file=sys.stderr)
-        sys.exit(1)
-    return resp
 
 
 class _MarkdownAnsiRenderer:
@@ -298,8 +326,19 @@ def call_llm_capture(
     model: str,
 ) -> tuple[str, _UsageStats | None]:
     resp = _make_request(messages, model, stream=False)
-    data = json.loads(resp.read().decode())
-    text = data["choices"][0]["message"]["content"].strip()
+    raw = resp.read().decode(errors="replace")
+    try:
+        data = json.loads(raw)
+        # OpenRouter can return {"error": ...} with HTTP 200
+        if "error" in data or not data.get("choices"):
+            err = data.get("error")
+            msg = err.get("message") if isinstance(err, dict) else err
+            print(f"Error: API returned no completion{': ' + str(msg) if msg else '.'}", file=sys.stderr)
+            sys.exit(1)
+        text = data["choices"][0]["message"]["content"].strip()
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+        print(f"Error: unexpected API response: {raw[:200]}", file=sys.stderr)
+        sys.exit(1)
     usage = data.get("usage")
     stats = _UsageStats(
         model=model,

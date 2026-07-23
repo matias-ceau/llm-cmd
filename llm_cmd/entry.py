@@ -224,7 +224,14 @@ def main_status() -> None:
     n_models = len(_load_models())
     print(f"model         : {model}  ({model_source})")
     print(f"api_url       : {constants._API_URL}")
-    print(f"api_key       : {constants._API_KEY or '(not set)'}")
+    key = constants._API_KEY
+    if not key:
+        key_display = "(not set)"
+    elif len(key) > 16:
+        key_display = f"{key[:8]}…{key[-4:]}"
+    else:
+        key_display = "(set)"
+    print(f"api_key       : {key_display}")
     print(f"models cached : {n_models} models  ({constants._MODELS_CACHE})")
     print(f"config file   : {constants._CONFIG_FILE}  ({'exists' if constants._CONFIG_FILE.exists() else 'not created'})")
     print(f"system_prompt : {cfg.get('system_prompt') or '(none)'}")

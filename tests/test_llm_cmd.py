@@ -405,18 +405,41 @@ class TestMakeRequest:
         assert exc.value.code == 1
 
     def test_connection_error_exits(self):
-        with patch("http.client.HTTPSConnection") as cls:
+        with patch("http.client.HTTPSConnection") as cls, \
+             patch("llm_cmd.http_client.time.sleep") as sleep:
             cls.return_value.request.side_effect = OSError("connection refused")
             with patch("llm_cmd.constants._API_KEY", "key"):
                 with pytest.raises(SystemExit) as exc:
                     llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
+        assert sleep.call_count == 3  # all backoff waits exhausted
 
     def test_http_error_exits(self, mock_http):
         mock_http(MockHTTPResponse(401, b'{"error":"unauthorized"}'))
         with pytest.raises(SystemExit) as exc:
             llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
+
+    def test_retries_on_429_then_succeeds(self):
+        limited = MockHTTPResponse(429, b"rate limited")
+        ok = MockHTTPResponse(200, b"ok")
+        with patch("http.client.HTTPSConnection") as cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client.time.sleep") as sleep:
+            cls.side_effect = [_mock_conn(limited), _mock_conn(ok)]
+            resp = llm_cmd._make_request(self._msgs(), "m", False)
+        assert resp.status == 200
+        assert sleep.call_count == 1
+
+    def test_no_retry_on_client_error(self, capsys):
+        with patch("http.client.HTTPSConnection") as cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client.time.sleep") as sleep:
+            cls.return_value = _mock_conn(MockHTTPResponse(404, b"not found"))
+            with pytest.raises(SystemExit) as exc:
+                llm_cmd._make_request(self._msgs(), "m", False)
+        assert exc.value.code == 1
+        sleep.assert_not_called()
 
     def test_system_message_included(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
@@ -639,6 +662,41 @@ class TestCallLlmCapture:
         assert stats.prompt_tokens == 10
         assert stats.completion_tokens == 20
         assert stats.cost_usd == pytest.approx(0.0003)
+
+    def test_error_payload_with_http_200_exits(self, mock_http, capsys):
+        body = json.dumps({"error": {"message": "boom"}}).encode()
+        mock_http(MockHTTPResponse(200, body))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert exc.value.code == 1
+        assert "boom" in capsys.readouterr().err
+
+    def test_empty_choices_exits(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(200, json.dumps({"choices": []}).encode()))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert exc.value.code == 1
+
+    def test_invalid_json_exits(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(200, b"<html>gateway error</html>"))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert exc.value.code == 1
+        assert "unexpected API response" in capsys.readouterr().err
+
+
+class TestMainStatus:
+    def test_api_key_masked(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(llm_cmd.constants, "_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(llm_cmd.constants, "_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(llm_cmd.constants, "_MODELS_CACHE", tmp_path / "models.json")
+        monkeypatch.setattr(llm_cmd.constants, "_HISTORY_DB", tmp_path / "history.db")
+        monkeypatch.setattr(llm_cmd.constants, "_API_KEY", "sk-or-v1-abcdef1234567890abcd")
+        from llm_cmd.entry import main_status
+        main_status()
+        out = capsys.readouterr().out
+        assert "sk-or-v1-abcdef1234567890abcd" not in out
+        assert "sk-or-v1…abcd" in out
 
 
 # ── confirm_and_run ───────────────────────────────────────────────────────────
