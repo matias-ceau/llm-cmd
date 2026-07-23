@@ -180,6 +180,47 @@ class TestGetContent:
                 get_content(args)
         assert exc.value.code == 1
 
+    def test_stdin_combined_with_words(self):
+        args = build_parser().parse_args(["summarize", "this"])
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        stdin.read.return_value = "diff --git a/foo b/foo\n+x\n"
+        with patch("sys.stdin", stdin):
+            content, mods = get_content(args)
+        assert content == "summarize this\n\ndiff --git a/foo b/foo\n+x"
+        assert mods == set()
+
+    def test_blank_stdin_with_words_ignored(self):
+        args = build_parser().parse_args(["hello"])
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        stdin.read.return_value = "  \n"
+        with patch("sys.stdin", stdin):
+            content, _ = get_content(args)
+        assert content == "hello"
+
+    def test_tty_words_skip_stdin_read(self):
+        args = build_parser().parse_args(["hello"])
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        with patch("sys.stdin", stdin):
+            content, _ = get_content(args)
+        assert content == "hello"
+        stdin.read.assert_not_called()
+
+    def test_stdin_combined_with_media_file(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.write_bytes(b"\x89PNG")
+        args = build_parser().parse_args(["describe", str(img)])
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        stdin.read.return_value = "extra context"
+        with patch("sys.stdin", stdin):
+            content, mods = get_content(args)
+        assert mods == {"image"}
+        assert isinstance(content, list)
+        assert content[0] == {"type": "text", "text": "describe\n\nextra context"}
+
 
 # ── _execute_prompt ───────────────────────────────────────────────────────────
 

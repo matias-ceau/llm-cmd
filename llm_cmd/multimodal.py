@@ -40,9 +40,11 @@ def _encode_file_content(path: Path) -> dict:
 def _build_user_content(
     words: list[str],
     extra_files: list[str] | None = None,
+    stdin_text: str | None = None,
 ) -> tuple[str | list[dict], set[str]]:
     """
     Scan words and extra_files for media files/URLs.
+    stdin_text (piped input) is appended after the word prompt, blank-line separated.
     Returns (content, detected_input_modalities).
     content is a plain str when text-only, list[dict] when multimodal.
     """
@@ -76,6 +78,8 @@ def _build_user_content(
             text_tokens.append(word)
 
     prompt_text = " ".join(text_tokens)
+    if stdin_text:
+        prompt_text = f"{prompt_text}\n\n{stdin_text}" if prompt_text else stdin_text
     if not media_parts:
         return prompt_text, detected
 
