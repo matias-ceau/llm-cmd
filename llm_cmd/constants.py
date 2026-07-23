@@ -15,6 +15,9 @@ _DEFAULT_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 _API_URL = os.environ.get("LLM_CMD_API_URL", _DEFAULT_API_URL)
 _API_KEY = os.environ.get("LLM_CMD_API_KEY") or os.environ.get("OPENROUTER_API_KEY", "")
 
+# Local Ollama fallback (used when the provider is unreachable or no key is set)
+_OLLAMA_URL = os.environ.get("LLM_CMD_OLLAMA_URL", "http://localhost:11434")
+
 # XDG paths
 _CACHE_DIR  = Path(os.environ.get("XDG_CACHE_HOME",  Path.home() / ".cache"))  / "llm-cmd"
 _CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "llm-cmd"

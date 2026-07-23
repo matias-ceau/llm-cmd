@@ -398,15 +398,17 @@ class TestMakeRequest:
         msgs.append({"role": "user", "content": prompt})
         return msgs
 
-    def test_no_api_key_exits(self):
-        with patch("llm_cmd.constants._API_KEY", ""):
+    def test_no_api_key_no_ollama_exits(self):
+        with patch("llm_cmd.constants._API_KEY", ""), \
+             patch("llm_cmd.http_client._ollama_models", return_value=None):
             with pytest.raises(SystemExit) as exc:
                 llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
 
-    def test_connection_error_exits(self):
+    def test_connection_error_no_ollama_exits(self):
         with patch("http.client.HTTPSConnection") as cls, \
-             patch("llm_cmd.http_client.time.sleep") as sleep:
+             patch("llm_cmd.http_client.time.sleep") as sleep, \
+             patch("llm_cmd.http_client._ollama_models", return_value=None):
             cls.return_value.request.side_effect = OSError("connection refused")
             with patch("llm_cmd.constants._API_KEY", "key"):
                 with pytest.raises(SystemExit) as exc:
@@ -427,8 +429,9 @@ class TestMakeRequest:
              patch("llm_cmd.constants._API_KEY", "key"), \
              patch("llm_cmd.http_client.time.sleep") as sleep:
             cls.side_effect = [_mock_conn(limited), _mock_conn(ok)]
-            resp = llm_cmd._make_request(self._msgs(), "m", False)
+            resp, used = llm_cmd._make_request(self._msgs(), "m", False)
         assert resp.status == 200
+        assert used == "m"
         assert sleep.call_count == 1
 
     def test_no_retry_on_client_error(self, capsys):
@@ -474,6 +477,62 @@ class TestMakeRequest:
         llm_cmd._make_request(self._msgs(), "m", stream=True, include_usage=False)
         _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
         assert "stream_options" not in json.loads(body_arg)
+
+
+class TestOllamaFallback:
+    def _msgs(self):
+        return [{"role": "user", "content": "p"}]
+
+    def _tags_resp(self, names):
+        body = json.dumps({"models": [{"name": n} for n in names]}).encode()
+        return MockHTTPResponse(200, body)
+
+    def test_falls_back_when_provider_unreachable(self, capsys):
+        ok = MockHTTPResponse(200, b"ok")
+        with patch("http.client.HTTPSConnection") as https_cls, \
+             patch("http.client.HTTPConnection") as http_cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client.time.sleep"):
+            https_cls.return_value.request.side_effect = OSError("no route")
+            http_cls.side_effect = [_mock_conn(self._tags_resp(["llama3.2"])), _mock_conn(ok)]
+            resp, used = llm_cmd._make_request(self._msgs(), "openai/gpt-4o", False)
+        assert resp.status == 200
+        assert used == "llama3.2"
+        assert "falling back to Ollama" in capsys.readouterr().err
+
+    def test_no_api_key_uses_ollama(self, capsys):
+        ok = MockHTTPResponse(200, b"ok")
+        with patch("http.client.HTTPConnection") as http_cls, \
+             patch("llm_cmd.constants._API_KEY", ""), \
+             patch("llm_cmd.constants._CONFIG_FILE", Path("/nonexistent/config.json")):
+            http_cls.side_effect = [_mock_conn(self._tags_resp(["qwen3:8b"])), _mock_conn(ok)]
+            resp, used = llm_cmd._make_request(self._msgs(), "m", False)
+        assert resp.status == 200
+        assert used == "qwen3:8b"
+
+    def test_config_ollama_model_preferred(self):
+        from llm_cmd.http_client import _pick_ollama_model
+        assert _pick_ollama_model(["a", "b"], {"ollama_model": "b"}) == "b"
+        assert _pick_ollama_model(["a", "b"], {}) == "a"
+
+    def test_no_fallback_on_api_status_error(self, capsys):
+        with patch("http.client.HTTPSConnection") as https_cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client._ollama_models") as tags:
+            https_cls.return_value = _mock_conn(MockHTTPResponse(401, b"unauthorized"))
+            with pytest.raises(SystemExit):
+                llm_cmd._make_request(self._msgs(), "m", False)
+        tags.assert_not_called()
+
+    def test_ollama_unreachable_returns_none(self):
+        with patch("http.client.HTTPConnection") as http_cls:
+            http_cls.return_value.request.side_effect = OSError("refused")
+            assert llm_cmd.http_client._ollama_models() is None
+
+    def test_ollama_empty_model_list_returns_none(self):
+        with patch("http.client.HTTPConnection") as http_cls:
+            http_cls.return_value = _mock_conn(self._tags_resp([]))
+            assert llm_cmd.http_client._ollama_models() is None
 
 
 class TestCallLlmStreaming:

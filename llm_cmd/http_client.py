@@ -13,6 +13,10 @@ _RETRIABLE_STATUSES = {429, 500, 502, 503, 529}
 _RETRY_WAITS = (1, 2, 4)  # seconds between attempts (4 attempts total)
 
 
+class _APIStatusError(Exception):
+    """Non-transient HTTP error from the API — retries exhausted or pointless."""
+
+
 def _open_connection(parsed) -> http.client.HTTPConnection:
     if parsed.scheme == "http":
         return http.client.HTTPConnection(parsed.netloc, timeout=30)
@@ -20,32 +24,80 @@ def _open_connection(parsed) -> http.client.HTTPConnection:
 
 
 def _post_json(url: str, body: str, api_key: str) -> http.client.HTTPResponse:
-    """POST with retry/backoff on connection errors and transient HTTP statuses."""
+    """POST with retry/backoff on connection errors and transient HTTP statuses.
+
+    Raises ConnectionError when the endpoint is unreachable (fallback-worthy),
+    _APIStatusError when the API answered with a non-200 status.
+    """
     parsed = urlparse(url)
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     last_error = ""
-    for attempt, wait in enumerate((*_RETRY_WAITS, None)):
+    status_error = False
+    for wait in (*_RETRY_WAITS, None):
         try:
             conn = _open_connection(parsed)
             conn.request("POST", parsed.path, body, headers)
             resp = conn.getresponse()
         except OSError as e:
             last_error = f"Connection error: {e}"
+            status_error = False
             resp = None
         if resp is not None:
             if resp.status == 200:
                 return resp
             detail = resp.read().decode(errors="replace")
             last_error = f"API error {resp.status}: {detail}"
+            status_error = True
             if resp.status not in _RETRIABLE_STATUSES:
                 break
         if wait is None:
             break
         print(f"\033[2m  retrying in {wait}s… ({last_error.splitlines()[0]})\033[0m", file=sys.stderr)
         time.sleep(wait)
-    raise ConnectionError(last_error)
+    raise _APIStatusError(last_error) if status_error else ConnectionError(last_error)
+
+
+def _ollama_models() -> list[str] | None:
+    """Names of locally available Ollama models, or None if Ollama is unreachable."""
+    parsed = urlparse(constants._OLLAMA_URL)
+    try:
+        conn = http.client.HTTPConnection(parsed.netloc, timeout=2)
+        conn.request("GET", "/api/tags")
+        resp = conn.getresponse()
+        if resp.status != 200:
+            return None
+        data = json.loads(resp.read().decode())
+        models = [m["name"] for m in data.get("models", [])]
+        return models or None
+    except (OSError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _pick_ollama_model(models: list[str], cfg: dict) -> str:
+    # TODO(user): fallback-model policy — config "ollama_model" wins, otherwise
+    # first available. Other options: most recently pulled, or a preference list.
+    return cfg.get("ollama_model") or models[0]
+
+
+def _ollama_fallback(
+    body_dict: dict,
+    reason: str,
+) -> tuple[http.client.HTTPResponse, str] | None:
+    models = _ollama_models()
+    if not models:
+        return None
+    from .config import _load_config
+    model = _pick_ollama_model(models, _load_config())
+    print(f"\033[2m⚠ {reason} — falling back to Ollama ({model})\033[0m", file=sys.stderr)
+    body = json.dumps({**body_dict, "model": model})
+    try:
+        resp = _post_json(f"{constants._OLLAMA_URL}/v1/chat/completions", body, "")
+        return resp, model
+    except (ConnectionError, _APIStatusError) as e:
+        print(f"Error: Ollama fallback failed: {e}", file=sys.stderr)
+        return None
 
 
 def _make_request(
@@ -53,19 +105,31 @@ def _make_request(
     model: str,
     stream: bool,
     include_usage: bool = False,
-) -> http.client.HTTPResponse:
-    if not constants._API_KEY:
-        print("Error: no API key. Set LLM_CMD_API_KEY or OPENROUTER_API_KEY.", file=sys.stderr)
-        sys.exit(1)
-
+) -> tuple[http.client.HTTPResponse, str]:
+    """Returns (response, model actually used — may differ on Ollama fallback)."""
     body_dict: dict = {"model": model, "messages": messages, "stream": stream}
     if stream and include_usage:
         body_dict["stream_options"] = {"include_usage": True}
     body = json.dumps(body_dict)
+    is_local = urlparse(constants._API_URL).scheme == "http"
+
+    if not constants._API_KEY and not is_local:
+        result = _ollama_fallback(body_dict, "no API key configured")
+        if result:
+            return result
+        print("Error: no API key. Set LLM_CMD_API_KEY or OPENROUTER_API_KEY, "
+              "or run a local Ollama.", file=sys.stderr)
+        sys.exit(1)
 
     try:
-        return _post_json(constants._API_URL, body, constants._API_KEY)
+        return _post_json(constants._API_URL, body, constants._API_KEY), model
+    except _APIStatusError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
     except ConnectionError as e:
+        result = _ollama_fallback(body_dict, "provider unreachable")
+        if result:
+            return result
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
@@ -281,7 +345,7 @@ def call_llm_streaming(
     collect_usage: bool = False,
     render_markdown: bool = True,
 ) -> tuple[str, _UsageStats | None]:
-    resp = _make_request(messages, model, stream=True, include_usage=collect_usage)
+    resp, model = _make_request(messages, model, stream=True, include_usage=collect_usage)
     usage_data: dict | None = None
     parts: list[str] = []
     renderer = _MarkdownAnsiRenderer() if render_markdown and _use_markdown_rendering() else None
@@ -325,7 +389,7 @@ def call_llm_capture(
     messages: list[dict],
     model: str,
 ) -> tuple[str, _UsageStats | None]:
-    resp = _make_request(messages, model, stream=False)
+    resp, model = _make_request(messages, model, stream=False)
     raw = resp.read().decode(errors="replace")
     try:
         data = json.loads(raw)
