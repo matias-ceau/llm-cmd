@@ -20,6 +20,14 @@ def _execute_prompt() -> str:
     )
 
 
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("llm-cmd")
+    except Exception:
+        return "unknown"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="llm-cmd",
@@ -84,6 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-models",
         action="store_true",
         help="Print cached model IDs (one per line) and exit.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version()}",
     )
     parser.add_argument(
         "--tldr",

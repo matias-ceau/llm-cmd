@@ -52,17 +52,17 @@ def main() -> None:
     if args.list_models:
         models = _load_models()
         if not models:
-            print("No cache — run: llm-cmd --update-models", file=sys.stderr)
+            print("Error: no model cache — run: llm-cmd --update-models", file=sys.stderr)
             sys.exit(1)
         print("\n".join(models))
         return
 
     resolved_model = _resolve_model_name(args.model)
-    if resolved_model != args.model:
+    if resolved_model != args.model and not args.quiet:
         print(f"\033[2mModel: {resolved_model}\033[0m", file=sys.stderr)
     args.model = resolved_model
 
-    session_id, ctx_messages = _resolve_session(args.session, args.follow_up)
+    session_id, ctx_messages = _resolve_session(args.session, args.follow_up, args.quiet)
     user_content, detected_mods = get_content(args)
 
     # Prompt text for display / execute mode system prompt
@@ -166,7 +166,7 @@ def main_model() -> None:
         else:
             models = _load_models()
             if not models:
-                print("No cache — run: llm-cmd --update-models", file=sys.stderr)
+                print("Error: no model cache — run: llm-cmd --update-models", file=sys.stderr)
                 sys.exit(1)
 
         current = _resolve_default_model()
@@ -187,7 +187,7 @@ def main_model() -> None:
         if model is None:
             models = _load_models()
             if not models:
-                print("No cache — run: llm-cmd --update-models", file=sys.stderr)
+                print("Error: no model cache — run: llm-cmd --update-models", file=sys.stderr)
                 sys.exit(1)
             current = _resolve_default_model()
             for i, m in enumerate(models, 1):

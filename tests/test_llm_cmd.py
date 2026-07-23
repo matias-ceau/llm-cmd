@@ -149,6 +149,12 @@ class TestParser:
     def test_quiet_flag(self):
         assert build_parser().parse_args(["-q", "hi"]).quiet is True
 
+    def test_version_flag_exits(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            build_parser().parse_args(["--version"])
+        assert exc.value.code == 0
+        assert "llm-cmd" in capsys.readouterr().out
+
 
 class TestGetContent:
     def test_stdin_fallback(self):
@@ -1042,6 +1048,20 @@ class TestSessions:
     def test_session_and_followup_mutually_exclusive(self):
         with pytest.raises(SystemExit):
             llm_cmd._resolve_session("myconv", follow_up=True)
+
+    def test_named_existing_session_announced_with_count(self, tmp_path, capsys):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
+            llm_cmd._record_message("myconv", "user",      "hi",  None,  None, "chat")
+            llm_cmd._record_message("myconv", "assistant", "hey", "gpt", None, "chat")
+            llm_cmd._resolve_session("myconv", False)
+        assert "Session: myconv (2 messages)" in capsys.readouterr().err
+
+    def test_quiet_suppresses_session_announcement(self, tmp_path, capsys):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
+            llm_cmd._resolve_session("auto", False, quiet=True)
+        assert capsys.readouterr().err == ""
 
     def test_multimodal_content_round_trip(self, tmp_path):
         multimodal = [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
