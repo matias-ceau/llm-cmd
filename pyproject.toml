@@ -1,6 +1,6 @@
 [project]
 name = "llm-cmd"
-version = "0.1.0"
+version = "0.2.0"
 description = "No-TUI LLM CLI — ask questions and run AI-generated shell commands"
 readme = "README.md"
 requires-python = ">=3.14"
