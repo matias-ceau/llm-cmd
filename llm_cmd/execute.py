@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -17,8 +18,9 @@ def _strip_fences(command: str) -> str:
 def _edit_in_editor(command: str, prompt: str) -> str:
     editor = os.environ.get("EDITOR", "vi")
     sep = "─" * 48
+    prompt_lines = "\n".join(f"# {l}" for l in prompt.splitlines()) or "# (empty)"
     header = (
-        f"# Prompt: {prompt}\n"
+        f"# Prompt:\n{prompt_lines}\n"
         f"# {sep}\n"
         f"# Edit the command below. Lines starting with # are ignored.\n\n"
     )
@@ -26,7 +28,7 @@ def _edit_in_editor(command: str, prompt: str) -> str:
         f.write(header + command + "\n")
         tmpfile = f.name
     try:
-        os.system(f'{editor} "{tmpfile}"')
+        subprocess.run([*shlex.split(editor), tmpfile])
         lines = Path(tmpfile).read_text().splitlines()
         return "\n".join(l for l in lines if not l.startswith("#")).strip()
     finally:

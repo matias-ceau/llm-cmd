@@ -2,6 +2,7 @@ _TLDR = """\
 llm-cmd — quick reference
 
   llm-cmd what is anagnorisis          free-text question (no quotes needed)
+  git diff | llm-cmd summarize this    piped stdin is appended to the prompt
   llm-cmd describe this photo.jpg      multimodal: auto-detect files in words
   llm-cmd -i photo.jpg what is this    multimodal: explicit file input
   llm-cmd -e update all cargo bins     generate + confirm + run a shell command
@@ -26,8 +27,12 @@ llm-cmd — quick reference
   llm-cmd-cost [--period 1d|7d|30d]    show cost summary
 
   llm-cmd --update-models              refresh model cache from provider
+  llm-cmd --version                    show version
   llm-cmd --tldr                       this cheatsheet
-  llm-cmd --docs                       full documentation\
+  llm-cmd --docs                       full documentation
+
+  Offline? If the provider is unreachable (or no API key is set), llm-cmd
+  falls back to a local Ollama (config "ollama_model" or first available).\
 """
 
 _DOCS = """\
@@ -55,8 +60,10 @@ DESCRIPTION
 
 OPTIONS
     words               Prompt words, joined with spaces. Files detected by
-                        extension are passed as multimodal content. Reads stdin
-                        if no words and no -i files are given.
+                        extension are passed as multimodal content. Piped stdin
+                        is appended after the words (blank-line separated), so
+                        `git diff | llm-cmd summarize this` sends both; with no
+                        words at all, stdin becomes the whole prompt.
 
     -e, --execute       Execute mode: generate a shell command, confirm, then run.
                         Prompts [Y/n/e] — Y is default (Enter to confirm).
@@ -82,9 +89,12 @@ OPTIONS
     -i, --input FILE    Explicitly pass a file as multimodal input. Repeatable.
                         Files are also auto-detected from words by extension.
 
-    -q, --quiet         Suppress post-response usage stats (model, tokens, cost).
+    -q, --quiet         Suppress post-response usage stats (model, tokens, cost)
+                        and the informational Model:/Session: stderr lines.
 
     --update-models     Fetch and cache the model list from the provider, then exit.
+
+    --version           Print version and exit.
 
     --list-models       Print cached model IDs (one per line) and exit.
 
@@ -131,10 +141,20 @@ SESSIONS
     llm-cmd -s myproject what about the tests ?
     llm-cmd -f any other suggestions ?   # continues last session
 
+OLLAMA FALLBACK
+    When the provider is unreachable (after retries) or no API key is set,
+    llm-cmd falls back to a local Ollama instance if one is running.
+    The model is taken from the "ollama_model" config key, or the first
+    locally available model otherwise. http:// endpoints (e.g. a permanent
+    LLM_CMD_API_URL pointing at Ollama) never require an API key.
+    Transient provider errors (429/5xx) are retried with backoff first;
+    authentication errors (401…) do NOT trigger the fallback.
+
 ENVIRONMENT
     LLM_CMD_MODEL       Default model name.
     LLM_CMD_API_KEY     API key (takes priority over OPENROUTER_API_KEY).
     LLM_CMD_API_URL     Full endpoint URL (default: OpenRouter).
+    LLM_CMD_OLLAMA_URL  Local Ollama base URL (default: http://localhost:11434).
     OPENROUTER_API_KEY  OpenRouter API key (fallback).
     NO_COLOR            Disable ANSI markdown styling in streamed chat output.
     XDG_CACHE_HOME      Cache directory (default: ~/.cache).
@@ -159,9 +179,9 @@ CONTEXT INJECTION
 
 FILES
     ~/.config/llm-cmd/config.json       Persistent config: default_model,
-                                         system_prompt. Auto-created on first
-                                         run; edit it directly or via
-                                         `llm-cmd-model edit`.
+                                         system_prompt, ollama_model.
+                                         Auto-created on first run; edit it
+                                         directly or via `llm-cmd-model edit`.
     ~/.cache/llm-cmd/models.json        Cached model list (12h TTL).
     ~/.local/share/llm-cmd/history.db   Usage history + sessions (SQLite).
 

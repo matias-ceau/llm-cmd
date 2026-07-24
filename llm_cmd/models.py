@@ -64,19 +64,23 @@ def _fetch_models() -> list[str]:
     """Fetch model list from provider, save to cache, return sorted IDs."""
     url = _models_url()
     parsed = urlparse(url)
-    conn = http.client.HTTPSConnection(parsed.netloc, context=constants._SSL_CTX)
+    conn = http.client.HTTPSConnection(parsed.netloc, context=constants._SSL_CTX, timeout=30)
     try:
         conn.request("GET", parsed.path, headers={"Authorization": f"Bearer {constants._API_KEY}"})
         resp = conn.getresponse()
     except OSError as e:
-        print(f"Connection error: {e}", file=sys.stderr)
+        print(f"Error: connection failed: {e}", file=sys.stderr)
         return []
     if resp.status != 200:
-        print(f"Failed to fetch models: HTTP {resp.status}", file=sys.stderr)
+        print(f"Error: failed to fetch models: HTTP {resp.status}", file=sys.stderr)
         return []
-    data = json.loads(resp.read().decode())
+    try:
+        data = json.loads(resp.read().decode())
+    except json.JSONDecodeError:
+        print("Error: invalid JSON in models response.", file=sys.stderr)
+        return []
     constants._CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    constants._MODELS_CACHE.write_text(json.dumps(data))
+    constants._atomic_write_text(constants._MODELS_CACHE, json.dumps(data))
     return sorted(m["id"] for m in data.get("data", []))
 
 

@@ -17,7 +17,8 @@ class _UsageStats:
 
 def _db_conn() -> sqlite3.Connection:
     constants._DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(constants._HISTORY_DB)
+    conn = sqlite3.connect(constants._HISTORY_DB, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS history (
             ts                REAL    NOT NULL,
@@ -127,29 +128,38 @@ def _last_session_id() -> str | None:
 def _resolve_session(
     session_arg: str | None,
     follow_up: bool,
+    quiet: bool = False,
 ) -> tuple[str | None, list[dict]]:
     if session_arg and follow_up:
         print("Error: --session and --follow-up are mutually exclusive.", file=sys.stderr)
         sys.exit(1)
 
+    def _announce(sid: str, n_msgs: int = 0) -> None:
+        if quiet:
+            return
+        suffix = f" ({n_msgs} messages)" if n_msgs else ""
+        print(f"\033[2mSession: {sid}{suffix}\033[0m", file=sys.stderr)
+
     if follow_up:
         sid = _last_session_id()
         if not sid:
-            print("No previous session found.", file=sys.stderr)
+            print("Error: no previous session found.", file=sys.stderr)
             sys.exit(1)
-        print(f"\033[2mSession: {sid}\033[0m", file=sys.stderr)
-        return sid, _get_session_messages(sid)
+        msgs = _get_session_messages(sid)
+        _announce(sid, len(msgs))
+        return sid, msgs
 
     if session_arg is None:
         return None, []
 
     if session_arg == "auto":
         sid = "auto-" + time.strftime("%Y%m%dT%H%M%S")
-        print(f"\033[2mSession: {sid}\033[0m", file=sys.stderr)
+        _announce(sid)
         return sid, []
 
     # Named session — load history if it exists
     msgs = _get_session_messages(session_arg)
+    _announce(session_arg, len(msgs))
     return session_arg, msgs
 
 

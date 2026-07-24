@@ -20,6 +20,14 @@ def _execute_prompt() -> str:
     )
 
 
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("llm-cmd")
+    except Exception:
+        return "unknown"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="llm-cmd",
@@ -86,6 +94,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print cached model IDs (one per line) and exit.",
     )
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {_package_version()}",
+    )
+    parser.add_argument(
         "--tldr",
         action="store_true",
         help="Show quick-reference cheatsheet and exit.",
@@ -115,14 +128,19 @@ def get_content(
 ) -> tuple[str | list[dict], set[str]]:
     """
     Returns (user_content, detected_input_modalities).
-    Handles stdin fallback, word joining, and multimodal file detection.
+    Piped stdin combines with words/-i files (appended after the prompt);
+    alone, it becomes the whole prompt.
     """
-    if args.words or args.input:
-        return _build_user_content(args.words, args.input or [])
+    stdin_text = ""
     if not sys.stdin.isatty():
-        text = sys.stdin.read().strip()
-        if text:
-            return text, set()
+        try:
+            stdin_text = sys.stdin.read().strip()
+        except OSError:
+            pass
+    if args.words or args.input:
+        return _build_user_content(args.words, args.input or [], stdin_text or None)
+    if stdin_text:
+        return stdin_text, set()
     print("Usage: llm-cmd [words ...]\n       echo 'question' | llm-cmd", file=sys.stderr)
     sys.exit(1)
 

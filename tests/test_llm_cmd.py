@@ -149,6 +149,12 @@ class TestParser:
     def test_quiet_flag(self):
         assert build_parser().parse_args(["-q", "hi"]).quiet is True
 
+    def test_version_flag_exits(self, capsys):
+        with pytest.raises(SystemExit) as exc:
+            build_parser().parse_args(["--version"])
+        assert exc.value.code == 0
+        assert "llm-cmd" in capsys.readouterr().out
+
 
 class TestGetContent:
     def test_stdin_fallback(self):
@@ -179,6 +185,47 @@ class TestGetContent:
             with pytest.raises(SystemExit) as exc:
                 get_content(args)
         assert exc.value.code == 1
+
+    def test_stdin_combined_with_words(self):
+        args = build_parser().parse_args(["summarize", "this"])
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        stdin.read.return_value = "diff --git a/foo b/foo\n+x\n"
+        with patch("sys.stdin", stdin):
+            content, mods = get_content(args)
+        assert content == "summarize this\n\ndiff --git a/foo b/foo\n+x"
+        assert mods == set()
+
+    def test_blank_stdin_with_words_ignored(self):
+        args = build_parser().parse_args(["hello"])
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        stdin.read.return_value = "  \n"
+        with patch("sys.stdin", stdin):
+            content, _ = get_content(args)
+        assert content == "hello"
+
+    def test_tty_words_skip_stdin_read(self):
+        args = build_parser().parse_args(["hello"])
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+        with patch("sys.stdin", stdin):
+            content, _ = get_content(args)
+        assert content == "hello"
+        stdin.read.assert_not_called()
+
+    def test_stdin_combined_with_media_file(self, tmp_path):
+        img = tmp_path / "photo.png"
+        img.write_bytes(b"\x89PNG")
+        args = build_parser().parse_args(["describe", str(img)])
+        stdin = MagicMock()
+        stdin.isatty.return_value = False
+        stdin.read.return_value = "extra context"
+        with patch("sys.stdin", stdin):
+            content, mods = get_content(args)
+        assert mods == {"image"}
+        assert isinstance(content, list)
+        assert content[0] == {"type": "text", "text": "describe\n\nextra context"}
 
 
 # ── _execute_prompt ───────────────────────────────────────────────────────────
@@ -357,25 +404,51 @@ class TestMakeRequest:
         msgs.append({"role": "user", "content": prompt})
         return msgs
 
-    def test_no_api_key_exits(self):
-        with patch("llm_cmd.constants._API_KEY", ""):
+    def test_no_api_key_no_ollama_exits(self):
+        with patch("llm_cmd.constants._API_KEY", ""), \
+             patch("llm_cmd.http_client._ollama_models", return_value=None):
             with pytest.raises(SystemExit) as exc:
                 llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
 
-    def test_connection_error_exits(self):
-        with patch("http.client.HTTPSConnection") as cls:
+    def test_connection_error_no_ollama_exits(self):
+        with patch("http.client.HTTPSConnection") as cls, \
+             patch("llm_cmd.http_client.time.sleep") as sleep, \
+             patch("llm_cmd.http_client._ollama_models", return_value=None):
             cls.return_value.request.side_effect = OSError("connection refused")
             with patch("llm_cmd.constants._API_KEY", "key"):
                 with pytest.raises(SystemExit) as exc:
                     llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
+        assert sleep.call_count == 3  # all backoff waits exhausted
 
     def test_http_error_exits(self, mock_http):
         mock_http(MockHTTPResponse(401, b'{"error":"unauthorized"}'))
         with pytest.raises(SystemExit) as exc:
             llm_cmd._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
+
+    def test_retries_on_429_then_succeeds(self):
+        limited = MockHTTPResponse(429, b"rate limited")
+        ok = MockHTTPResponse(200, b"ok")
+        with patch("http.client.HTTPSConnection") as cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client.time.sleep") as sleep:
+            cls.side_effect = [_mock_conn(limited), _mock_conn(ok)]
+            resp, used = llm_cmd._make_request(self._msgs(), "m", False)
+        assert resp.status == 200
+        assert used == "m"
+        assert sleep.call_count == 1
+
+    def test_no_retry_on_client_error(self, capsys):
+        with patch("http.client.HTTPSConnection") as cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client.time.sleep") as sleep:
+            cls.return_value = _mock_conn(MockHTTPResponse(404, b"not found"))
+            with pytest.raises(SystemExit) as exc:
+                llm_cmd._make_request(self._msgs(), "m", False)
+        assert exc.value.code == 1
+        sleep.assert_not_called()
 
     def test_system_message_included(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
@@ -410,6 +483,62 @@ class TestMakeRequest:
         llm_cmd._make_request(self._msgs(), "m", stream=True, include_usage=False)
         _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
         assert "stream_options" not in json.loads(body_arg)
+
+
+class TestOllamaFallback:
+    def _msgs(self):
+        return [{"role": "user", "content": "p"}]
+
+    def _tags_resp(self, names):
+        body = json.dumps({"models": [{"name": n} for n in names]}).encode()
+        return MockHTTPResponse(200, body)
+
+    def test_falls_back_when_provider_unreachable(self, capsys):
+        ok = MockHTTPResponse(200, b"ok")
+        with patch("http.client.HTTPSConnection") as https_cls, \
+             patch("http.client.HTTPConnection") as http_cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client.time.sleep"):
+            https_cls.return_value.request.side_effect = OSError("no route")
+            http_cls.side_effect = [_mock_conn(self._tags_resp(["llama3.2"])), _mock_conn(ok)]
+            resp, used = llm_cmd._make_request(self._msgs(), "openai/gpt-4o", False)
+        assert resp.status == 200
+        assert used == "llama3.2"
+        assert "falling back to Ollama" in capsys.readouterr().err
+
+    def test_no_api_key_uses_ollama(self, capsys):
+        ok = MockHTTPResponse(200, b"ok")
+        with patch("http.client.HTTPConnection") as http_cls, \
+             patch("llm_cmd.constants._API_KEY", ""), \
+             patch("llm_cmd.constants._CONFIG_FILE", Path("/nonexistent/config.json")):
+            http_cls.side_effect = [_mock_conn(self._tags_resp(["qwen3:8b"])), _mock_conn(ok)]
+            resp, used = llm_cmd._make_request(self._msgs(), "m", False)
+        assert resp.status == 200
+        assert used == "qwen3:8b"
+
+    def test_config_ollama_model_preferred(self):
+        from llm_cmd.http_client import _pick_ollama_model
+        assert _pick_ollama_model(["a", "b"], {"ollama_model": "b"}) == "b"
+        assert _pick_ollama_model(["a", "b"], {}) == "a"
+
+    def test_no_fallback_on_api_status_error(self, capsys):
+        with patch("http.client.HTTPSConnection") as https_cls, \
+             patch("llm_cmd.constants._API_KEY", "key"), \
+             patch("llm_cmd.http_client._ollama_models") as tags:
+            https_cls.return_value = _mock_conn(MockHTTPResponse(401, b"unauthorized"))
+            with pytest.raises(SystemExit):
+                llm_cmd._make_request(self._msgs(), "m", False)
+        tags.assert_not_called()
+
+    def test_ollama_unreachable_returns_none(self):
+        with patch("http.client.HTTPConnection") as http_cls:
+            http_cls.return_value.request.side_effect = OSError("refused")
+            assert llm_cmd.http_client._ollama_models() is None
+
+    def test_ollama_empty_model_list_returns_none(self):
+        with patch("http.client.HTTPConnection") as http_cls:
+            http_cls.return_value = _mock_conn(self._tags_resp([]))
+            assert llm_cmd.http_client._ollama_models() is None
 
 
 class TestCallLlmStreaming:
@@ -599,6 +728,41 @@ class TestCallLlmCapture:
         assert stats.completion_tokens == 20
         assert stats.cost_usd == pytest.approx(0.0003)
 
+    def test_error_payload_with_http_200_exits(self, mock_http, capsys):
+        body = json.dumps({"error": {"message": "boom"}}).encode()
+        mock_http(MockHTTPResponse(200, body))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert exc.value.code == 1
+        assert "boom" in capsys.readouterr().err
+
+    def test_empty_choices_exits(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(200, json.dumps({"choices": []}).encode()))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert exc.value.code == 1
+
+    def test_invalid_json_exits(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(200, b"<html>gateway error</html>"))
+        with pytest.raises(SystemExit) as exc:
+            llm_cmd.call_llm_capture(self._msgs(), "m")
+        assert exc.value.code == 1
+        assert "unexpected API response" in capsys.readouterr().err
+
+
+class TestMainStatus:
+    def test_api_key_masked(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr(llm_cmd.constants, "_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(llm_cmd.constants, "_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(llm_cmd.constants, "_MODELS_CACHE", tmp_path / "models.json")
+        monkeypatch.setattr(llm_cmd.constants, "_HISTORY_DB", tmp_path / "history.db")
+        monkeypatch.setattr(llm_cmd.constants, "_API_KEY", "sk-or-v1-abcdef1234567890abcd")
+        from llm_cmd.entry import main_status
+        main_status()
+        out = capsys.readouterr().out
+        assert "sk-or-v1-abcdef1234567890abcd" not in out
+        assert "sk-or-v1…abcd" in out
+
 
 # ── confirm_and_run ───────────────────────────────────────────────────────────
 
@@ -664,11 +828,25 @@ class TestEditInEditor:
             mock_ntf.return_value.__enter__ = lambda s: s
             mock_ntf.return_value.__exit__ = lambda *a: False
             mock_ntf.return_value.name = str(tmpfile)
-            with patch("os.system"):
+            with patch("llm_cmd.execute.subprocess.run") as run:
                 with patch("os.unlink"):
                     result = llm_cmd._edit_in_editor("ls -la", "test")
+        run.assert_called_once_with(["true", str(tmpfile)])
         assert "#" not in result
         assert "ls -la" in result
+
+    def test_editor_with_flags_split_correctly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EDITOR", "code --wait")
+        with patch("tempfile.NamedTemporaryFile") as mock_ntf:
+            tmpfile = tmp_path / "cmd.sh"
+            tmpfile.write_text("ls\n")
+            mock_ntf.return_value.__enter__ = lambda s: s
+            mock_ntf.return_value.__exit__ = lambda *a: False
+            mock_ntf.return_value.name = str(tmpfile)
+            with patch("llm_cmd.execute.subprocess.run") as run:
+                with patch("os.unlink"):
+                    llm_cmd._edit_in_editor("ls", "test")
+        run.assert_called_once_with(["code", "--wait", str(tmpfile)])
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -870,6 +1048,20 @@ class TestSessions:
     def test_session_and_followup_mutually_exclusive(self):
         with pytest.raises(SystemExit):
             llm_cmd._resolve_session("myconv", follow_up=True)
+
+    def test_named_existing_session_announced_with_count(self, tmp_path, capsys):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
+            llm_cmd._record_message("myconv", "user",      "hi",  None,  None, "chat")
+            llm_cmd._record_message("myconv", "assistant", "hey", "gpt", None, "chat")
+            llm_cmd._resolve_session("myconv", False)
+        assert "Session: myconv (2 messages)" in capsys.readouterr().err
+
+    def test_quiet_suppresses_session_announcement(self, tmp_path, capsys):
+        with patch("llm_cmd.constants._HISTORY_DB", tmp_path / "history.db"), \
+             patch("llm_cmd.constants._DATA_DIR", tmp_path):
+            llm_cmd._resolve_session("auto", False, quiet=True)
+        assert capsys.readouterr().err == ""
 
     def test_multimodal_content_round_trip(self, tmp_path):
         multimodal = [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
@@ -1115,6 +1307,24 @@ class TestMainModel:
         monkeypatch.setenv("EDITOR", "myeditor")
         with patch("llm_cmd.constants._CONFIG_FILE", cfg_file), \
              patch("llm_cmd.constants._CONFIG_DIR", tmp_path), \
-             patch("os.system") as mock_system:
+             patch("subprocess.run") as run:
             llm_cmd.main_model()
-        mock_system.assert_called_once_with(f"myeditor {cfg_file}")
+        run.assert_called_once_with(["myeditor", str(cfg_file)])
+
+
+class TestAtomicWrite:
+    def test_writes_content(self, tmp_path):
+        target = tmp_path / "out.json"
+        llm_cmd.constants._atomic_write_text(target, '{"a": 1}')
+        assert target.read_text() == '{"a": 1}'
+
+    def test_overwrites_existing(self, tmp_path):
+        target = tmp_path / "out.json"
+        target.write_text("old")
+        llm_cmd.constants._atomic_write_text(target, "new")
+        assert target.read_text() == "new"
+
+    def test_no_leftover_temp_file(self, tmp_path):
+        target = tmp_path / "out.json"
+        llm_cmd.constants._atomic_write_text(target, "x")
+        assert [p.name for p in tmp_path.iterdir()] == ["out.json"]

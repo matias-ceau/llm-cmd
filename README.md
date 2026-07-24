@@ -41,18 +41,26 @@ llm-cmd [-e] [-c] [-m MODEL] [-s SYSTEM] [words ...]
 | `-c` | Generate code, print to stdout |
 | `-m MODEL` | Override model (default: `openai/gpt-4o-mini`). MODEL may be a substring matching a single cached model, e.g. `-m haiku` |
 | `-s PROMPT` | Override system prompt |
+| `-q` | Quiet: suppress usage stats and informational stderr lines |
 | `--update-models` | Force-refresh model cache |
 | `--list-models` | Print cached model IDs |
+| `--version` | Print version |
 
 Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold, list items, blockquotes) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
 
 Run `llm-cmd-model set` with no argument to pick a default model interactively from the cached list. Run `llm-cmd-model edit` to open the config file directly in `$EDITOR`.
 
-Stdin is also supported:
+Stdin is also supported, alone or combined with a prompt (piped content is appended after the words):
 
 ```bash
-cat error.log | llm-cmd explain this error
+cat error.log | llm-cmd            # stdin as the whole prompt
+git diff | llm-cmd summarize this  # words + piped context
+git diff | llm-cmd -e write a conventional commit command
 ```
+
+### Offline / Ollama fallback
+
+If the provider is unreachable (after automatic retries) or no API key is set, `llm-cmd` transparently falls back to a local [Ollama](https://ollama.com) instance when one is running. The local model comes from the `"ollama_model"` config key, or the first available model otherwise. Override the Ollama URL with `LLM_CMD_OLLAMA_URL` (default `http://localhost:11434`).
 
 ## Configuration
 
@@ -71,7 +79,8 @@ Environment variables always take priority over the config file:
 | `OPENROUTER_API_KEY` | — | API key (required unless `LLM_CMD_API_KEY` set) |
 | `LLM_CMD_MODEL` | config file, or `openai/gpt-4o-mini` | Default model |
 | `LLM_CMD_API_KEY` | `$OPENROUTER_API_KEY` | Override API key |
-| `LLM_CMD_API_URL` | OpenRouter endpoint | Any OpenAI-compatible URL |
+| `LLM_CMD_API_URL` | OpenRouter endpoint | Any OpenAI-compatible URL (http:// endpoints need no key) |
+| `LLM_CMD_OLLAMA_URL` | `http://localhost:11434` | Local Ollama used as offline fallback |
 
 ### Persistent instructions + machine context
 
