@@ -1,4 +1,5 @@
 import os
+import shutil
 import ssl
 from pathlib import Path
 
@@ -19,9 +20,9 @@ _API_KEY = os.environ.get("LLM_CMD_API_KEY") or os.environ.get("OPENROUTER_API_K
 _OLLAMA_URL = os.environ.get("LLM_CMD_OLLAMA_URL", "http://localhost:11434")
 
 # XDG paths
-_CACHE_DIR  = Path(os.environ.get("XDG_CACHE_HOME",  Path.home() / ".cache"))  / "llm-cmd"
-_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "llm-cmd"
-_DATA_DIR   = Path(os.environ.get("XDG_DATA_HOME",   Path.home() / ".local" / "share")) / "llm-cmd"
+_CACHE_DIR  = Path(os.environ.get("XDG_CACHE_HOME",  Path.home() / ".cache"))  / "quipcli"
+_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "quipcli"
+_DATA_DIR   = Path(os.environ.get("XDG_DATA_HOME",   Path.home() / ".local" / "share")) / "quipcli"
 
 _MODELS_CACHE = _CACHE_DIR  / "models.json"
 _CONFIG_FILE  = _CONFIG_DIR / "config.json"
@@ -29,6 +30,30 @@ _HISTORY_DB   = _DATA_DIR   / "history.db"
 
 _CACHE_TTL = 43200
 _SSL_CTX   = ssl.create_default_context()
+
+
+def _migrate_legacy_data() -> None:
+    """One-time copy from the pre-rename ~/.config/llm-cmd (etc.) layout, if
+    present and the quipcli location hasn't been used yet. Never touches or
+    deletes the old files — plain copy, safe to run on every startup (it's a
+    no-op once the new location exists)."""
+    old_cache  = Path(os.environ.get("XDG_CACHE_HOME",  Path.home() / ".cache"))  / "llm-cmd"
+    old_config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "llm-cmd"
+    old_data   = Path(os.environ.get("XDG_DATA_HOME",   Path.home() / ".local" / "share")) / "llm-cmd"
+    try:
+        for old_file, new_file in (
+            (old_config / "config.json", _CONFIG_FILE),
+            (old_cache  / "models.json", _MODELS_CACHE),
+            (old_data   / "history.db",  _HISTORY_DB),
+        ):
+            if old_file.exists() and not new_file.exists():
+                new_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(old_file, new_file)
+    except OSError:
+        pass
+
+
+_migrate_legacy_data()
 
 
 def _atomic_write_text(path: Path, text: str) -> None:

@@ -1,0 +1,177 @@
+import shlex
+import shutil
+import subprocess
+import sys
+
+from . import constants
+from .config import _load_config, _resolve_default_model, _save_config
+from .execute import _edit_text_value
+from .http_client import _ollama_models
+from .models import _load_models, _load_models_full
+
+_CONFIG_KEYS = ["default_model", "system_prompt", "ollama_model"]
+
+
+def _fzf_available() -> bool:
+    return shutil.which("fzf") is not None
+
+
+def _run_fzf(
+    items: list[str],
+    *,
+    header: str | None = None,
+    preview_cmd: str | None = None,
+    extra_binds: list[str] | None = None,
+    prompt: str | None = None,
+) -> str | None:
+    """Shell out to the real fzf binary. Returns the selected line, or None
+    on Esc/Ctrl-C/empty selection."""
+    args = ["fzf"]
+    if header:
+        args += ["--header", header]
+    if prompt:
+        args += ["--prompt", prompt]
+    if preview_cmd:
+        args += ["--preview", preview_cmd, "--preview-window", "right,60%"]
+    for bind in extra_binds or []:
+        args += ["--bind", bind]
+    try:
+        result = subprocess.run(args, input="\n".join(items), capture_output=True, text=True)
+    except OSError:
+        return None
+    selected = result.stdout.strip()
+    return selected or None
+
+
+def _model_id_from_line(line: str) -> str:
+    return line[2:] if len(line) > 2 else line.strip()
+
+
+def _model_lines() -> list[str]:
+    current = _resolve_default_model()
+    return [("* " if m == current else "  ") + m for m in _load_models()]
+
+
+def _print_model_info(line: str) -> None:
+    """Handler for the hidden --_tui-model-info flag (fzf preview command)."""
+    model_id = _model_id_from_line(line)
+    for m in _load_models_full():
+        if m.get("id") != model_id:
+            continue
+        pricing = m.get("pricing") or {}
+        arch = m.get("architecture") or {}
+
+        def _per_million(key: str) -> str:
+            try:
+                return f"${float(pricing[key]) * 1_000_000:.2f}"
+            except (KeyError, TypeError, ValueError):
+                return "n/a"
+
+        print(f"id: {model_id}")
+        print(f"name: {m.get('name', '')}")
+        print(f"context_length: {m.get('context_length', 'n/a')}")
+        print(f"price_per_1M_prompt: {_per_million('prompt')}")
+        print(f"price_per_1M_completion: {_per_million('completion')}")
+        print(f"input_modalities: {', '.join(arch.get('input_modalities', []))}")
+        print(f"output_modalities: {', '.join(arch.get('output_modalities', []))}")
+        return
+    print(f"id: {model_id}")
+    print("(no cached details — run: qp --update-models)")
+
+
+def _models_view(picker_mode: bool = False) -> str | None:
+    lines = _model_lines()
+    if not lines:
+        print("No cached models — run: qp --update-models", file=sys.stderr)
+        return None
+    action = "pick" if picker_mode else "set as default"
+    selected = _run_fzf(
+        lines,
+        header=f"Models — Enter: {action}  ctrl-r: refresh from provider  Esc: back",
+        preview_cmd="qp --_tui-model-info {}",
+        extra_binds=["ctrl-r:reload(qp --update-models 1>&2; qp --_tui-list-models)"],
+        prompt="model> ",
+    )
+    if selected is None:
+        return None
+    model_id = _model_id_from_line(selected)
+    if picker_mode:
+        return model_id
+    cfg = _load_config()
+    cfg["default_model"] = model_id
+    _save_config(cfg)
+    print(f"\033[2mDefault model set to: {model_id}\033[0m", file=sys.stderr)
+    return model_id
+
+
+def pick_model_interactive() -> str | None:
+    """Used by --model-set with no value, when fzf is available."""
+    return _models_view(picker_mode=True)
+
+
+def _config_lines(cfg: dict) -> list[str]:
+    lines = []
+    for key in _CONFIG_KEYS:
+        val = cfg.get(key) or "(not set)"
+        val = val if len(val) <= 60 else val[:57] + "..."
+        lines.append(f"{key} = {val}")
+    return lines
+
+
+def _key_from_line(line: str) -> str:
+    return line.split(" = ", 1)[0]
+
+
+def _config_view() -> None:
+    config_path = shlex.quote(str(constants._CONFIG_FILE))
+    preview = (
+        f"cat {config_path} | bat -l json --color=always --style=plain --paging=never "
+        f"2>/dev/null || cat {config_path}"
+    )
+    while True:
+        selected = _run_fzf(
+            _config_lines(_load_config()),
+            header="Config — Enter: edit  ctrl-e: open full file in $EDITOR  Esc: back",
+            preview_cmd=preview,
+            extra_binds=["ctrl-e:execute(qp --config-edit)+reload(qp --_tui-config-lines)"],
+            prompt="config> ",
+        )
+        if selected is None:
+            return
+        key = _key_from_line(selected)
+        cfg = _load_config()
+        if key == "default_model":
+            picked = _models_view(picker_mode=True)
+            if picked is not None:
+                cfg["default_model"] = picked
+                _save_config(cfg)
+        elif key == "ollama_model":
+            models = _ollama_models()
+            if models:
+                current = cfg.get("ollama_model") or ""
+                lines = [("* " if m == current else "  ") + m for m in models]
+                picked_line = _run_fzf(lines, header="Ollama models — Enter: pick  Esc: back", prompt="ollama> ")
+                if picked_line is not None:
+                    cfg["ollama_model"] = _model_id_from_line(picked_line)
+                    _save_config(cfg)
+            else:
+                print("\033[2mOllama unreachable — enter a value manually.\033[0m", file=sys.stderr)
+                cfg["ollama_model"] = _edit_text_value(cfg.get("ollama_model") or "")
+                _save_config(cfg)
+        elif key == "system_prompt":
+            cfg["system_prompt"] = _edit_text_value(cfg.get("system_prompt") or "")
+            _save_config(cfg)
+
+
+def run_tui() -> None:
+    if not _fzf_available():
+        print("Error: --tui requires fzf (https://github.com/junegunn/fzf).", file=sys.stderr)
+        sys.exit(1)
+    while True:
+        choice = _run_fzf(["Models", "Config"], header="quip — interactive config  Esc: quit", prompt="quip> ")
+        if choice is None:
+            return
+        if choice == "Models":
+            _models_view(picker_mode=False)
+        elif choice == "Config":
+            _config_view()

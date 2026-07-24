@@ -50,7 +50,7 @@ def _maybe_update_models_bg() -> None:
         [
             sys.executable, "-c",
             f"import sys; sys.path.insert(0, {pkg_parent!r});"
-            f"from llm_cmd.models import _fetch_models; _fetch_models()",
+            f"from quipcli.models import _fetch_models; _fetch_models()",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -150,5 +150,5 @@ def _check_modality_support(model: str, needed: set[str]) -> None:
         for m in compatible[:10]:
             print(f"  {m}", file=sys.stderr)
         if len(compatible) > 10:
-            print(f"  … and {len(compatible) - 10} more. Use: llm-cmd-model list --in {','.join(sorted(needed))}", file=sys.stderr)
+            print(f"  … and {len(compatible) - 10} more. Use: qp --models --in {','.join(sorted(needed))}", file=sys.stderr)
     sys.exit(1)

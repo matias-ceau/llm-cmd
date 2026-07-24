@@ -4,12 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`llm-cmd` is a minimal no-TUI Python CLI for LLMs. Core use cases:
-- `llm-cmd what is the meaning of anagnorisis` — free-text prompt, no quotes
-- `llm-cmd -e update all my cargo binaries` — generate + confirm + run a shell command
-- `llm-cmd-model set openai/gpt-4o` — set persistent default model
-- `llm-cmd-status` — show current configuration
-- `llm-cmd-cost --period 30d` — usage cost summary
+`quipcli` is a minimal Python CLI for LLMs, installed as the single binary `qp`
+(renamed from `llm-cmd`/`llm-cmd-model`/`llm-cmd-status`/`llm-cmd-cost` — the old
+name collided with an unrelated PyPI package, and the four separate executables
+are now flags on one binary). Core use cases:
+- `qp what is the meaning of anagnorisis` — free-text prompt, no quotes
+- `qp -e update all my cargo binaries` — generate + confirm + run a shell command
+- `qp --model-set openai/gpt-4o` — set persistent default model
+- `qp --status` — show current configuration
+- `qp --cost 30d` — usage cost summary
+- `qp --tui` — interactive fzf/bat picker for models and config
 
 Default provider: OpenRouter (`OPENROUTER_API_KEY`). Any OpenAI-compatible API works via `LLM_CMD_API_URL` / `LLM_CMD_API_KEY` / `LLM_CMD_MODEL`.
 
@@ -19,66 +23,70 @@ Default provider: OpenRouter (`OPENROUTER_API_KEY`). Any OpenAI-compatible API w
 uv tool install -e .
 
 # Activate tab-completion (add to .bashrc / .zshrc)
-eval "$(register-python-argcomplete llm-cmd)"
+eval "$(register-python-argcomplete qp)"
 
 # Populate model cache (auto-refreshes every 12h in background)
-llm-cmd --update-models
+qp --update-models
 ```
 
 ## Development commands
 
 ```bash
-uv run python -m llm_cmd <prompt>  # run without installing
-llm-cmd --list-models              # inspect model cache
-llm-cmd --update-models            # force model cache refresh
+uv run python -m quipcli <prompt>  # run without installing
+qp --models                        # inspect model cache
+qp --update-models                 # force model cache refresh
 ```
 
 ## Architecture
 
-Package: `llm_cmd/` (13 modules)
+Package: `quipcli/` (14 modules)
 
 | Module | Responsibility |
 |---|---|
-| `constants.py` | Provider env vars, XDG paths, MIME types, SSL context |
+| `constants.py` | Provider env vars, XDG paths, MIME types, SSL context, legacy-data migration |
 | `config.py` | Load/save/resolve config file; `DEFAULT_MODEL` |
 | `context.py` | `_machine_context` — OS/distro/shell/arch, computed fresh per call |
 | `db.py` | SQLite history + sessions + cost summary; `_UsageStats` dataclass |
 | `models.py` | Model cache (load, fetch, background refresh, modality filtering) |
 | `multimodal.py` | File encoding, image URL detection, user content builder |
-| `http_client.py` | `_make_request`, `call_llm_streaming`, `call_llm_capture` |
-| `execute.py` | `_strip_fences`, `_edit_in_editor`, `confirm_and_run` |
+| `http_client.py` | `_make_request`, `call_llm_streaming`, `call_llm_capture`, Ollama fallback |
+| `execute.py` | `_strip_fences`, `_edit_in_editor`, `_edit_text_value`, `confirm_and_run` |
 | `cli.py` | `build_parser`, `get_content`, `_print_stats`, `_execute_prompt` |
+| `tui.py` | `run_tui` — fzf/bat-based interactive picker (Models / Config views) |
 | `docs.py` | `_TLDR` and `_DOCS` strings |
-| `entry.py` | Entry points: `main`, `main_model`, `main_status`, `main_cost` |
+| `entry.py` | `main` + flag handlers (`_do_status`, `_do_cost`, `_do_models`, `_do_model_get`, `_do_model_set`, `_do_config_edit`) |
 | `__init__.py` | Façade: re-exports public API for backward compat with tests |
-| `__main__.py` | `python -m llm_cmd` support |
+| `__main__.py` | `python -m quipcli` support |
 
 Key design rules:
-- **Patchable globals** (`_API_KEY`, `_API_URL`, `_MODELS_CACHE`, `_CONFIG_FILE`, `_CONFIG_DIR`, `_HISTORY_DB`, `_DATA_DIR`, `_CACHE_TTL`): live in `constants.py`. All functions that use them reference them via `from . import constants` + `constants._X` (module-qualified lookup), never `from .constants import _X`. This preserves test patchability at `llm_cmd.constants._X`.
+- **Single binary, no subcommand executables**: everything is a flag on `qp` (`--status`, `--cost`, `--models`, `--model-get`, `--model-set`, `--config-edit`, `--tui`, …), dispatched near the top of `main()` (`entry.py`) before the normal prompt flow — same pattern as the pre-existing `--tldr`/`--docs`/`--update-models` early returns. `pyproject.toml` declares one `[project.scripts]` entry: `qp = "quipcli:main"`.
+- **Patchable globals** (`_API_KEY`, `_API_URL`, `_MODELS_CACHE`, `_CONFIG_FILE`, `_CONFIG_DIR`, `_HISTORY_DB`, `_DATA_DIR`, `_CACHE_TTL`): live in `constants.py`. All functions that use them reference them via `from . import constants` + `constants._X` (module-qualified lookup), never `from .constants import _X`. This preserves test patchability at `quipcli.constants._X`.
+- **Legacy-data migration** (`_migrate_legacy_data` in `constants.py`, run once at import time): if the new XDG dirs (`~/.config/quipcli` etc.) don't have a file yet but the pre-rename `~/.config/llm-cmd` (etc.) does, copies `config.json`/`models.json`/`history.db` over — one-time, non-destructive, no deletion of the old files.
 - **HTTP layer** (`_make_request`): direct `http.client` calls, zero third-party deps except `argcomplete`; retries with backoff (1s/2s/4s) on connection errors and transient statuses (429/500/502/503/529); supports `http://` endpoints (no API key required for those); returns `(response, model_used)`
-- **Stdin + words** (`get_content` in `cli.py`): piped stdin is appended after the word prompt (blank-line separated) — `git diff | llm-cmd summarize this` sends both; stdin alone is the whole prompt
+- **Stdin + words** (`get_content` in `cli.py`): piped stdin is appended after the word prompt (blank-line separated) — `git diff | qp summarize this` sends both; stdin alone is the whole prompt
 - **Ollama fallback** (`_ollama_fallback` in `http_client.py`): when the provider is unreachable after retries, or no API key is set, falls back to local Ollama (`LLM_CMD_OLLAMA_URL`, default `http://localhost:11434`); model from config `ollama_model` or first of `/api/tags` (`_pick_ollama_model`); HTTP status errors (401…) do NOT trigger it
 - **Streaming** (`call_llm_streaming`): SSE parsed line-by-line, tokens printed as received; returns `_UsageStats | None`
 - **Markdown rendering**: chat streaming applies lightweight ANSI markdown styling on TTY (headings, inline/fenced code, bold, list items, blockquotes) without buffering full responses; disabled by `NO_COLOR` or non-TTY output
 - **Execute mode** (`confirm_and_run`): captures full response, strips markdown fences, prompts `[Y/n/e]` (Y is default)
-- **Edit mode**: `e` in confirm_and_run opens `$EDITOR` with the original prompt and proposed command as context (comment lines stripped on save)
-- **Model cache** (`~/.cache/llm-cmd/models.json`): loaded for tab-completion, refreshed every 12h via detached subprocess (`_maybe_update_models_bg`)
-- **Model name resolution** (`_resolve_model_name` in `models.py`): `-m/--model` and `llm-cmd-model set` accept a substring that uniquely matches a cached model id (e.g. `-m haiku`); ambiguous matches list candidates and exit, no match passes the name through unchanged. `llm-cmd-model set` with no argument shows a numbered picker over the cached models.
-- **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback. Auto-created with current defaults on first run (`_ensure_config` in `config.py`, called from `main`/`main_model`/`main_status`) so the file always exists and can be hand-edited in place; `llm-cmd-model edit` opens it in `$EDITOR`. Keys: `default_model`, `system_prompt`, `ollama_model`
+- **Edit mode**: `e` in confirm_and_run opens `$EDITOR` with the original prompt and proposed command as context (comment lines stripped on save); `_edit_text_value` (`execute.py`) is the same tempfile+`$EDITOR` pattern without the comment header, used by `--tui`'s Config view for plain-text fields
+- **Model cache** (`~/.cache/quipcli/models.json`): loaded for tab-completion, refreshed every 12h via detached subprocess (`_maybe_update_models_bg`)
+- **Model name resolution** (`_resolve_model_name` in `models.py`): `-m/--model` and `--model-set` accept a substring that uniquely matches a cached model id (e.g. `-m haiku`); ambiguous matches list candidates and exit, no match passes the name through unchanged. `--model-set` with no argument launches the `--tui` model picker if `fzf` is installed, else falls back to a numbered picker read from stdin.
+- **Interactive TUI** (`tui.py`, `--tui`): shells out to real `fzf`/`bat` binaries (same external-tool pattern as `$EDITOR`, no reimplemented fuzzy-finder); `_run_fzf` wraps `subprocess.run(["fzf", ...])`. Two views: `_models_view(picker_mode)` (standalone sets `default_model` on Enter; `picker_mode=True` — used from the Config view and from `--model-set`'s fallback — just returns the picked id) and `_config_view()` (drills into `_models_view`/local Ollama list for enum-like keys, `_edit_text_value` for free text, `ctrl-e` opens the full file in `$EDITOR`). Preview panes call back into `qp` itself via hidden flags (`--_tui-model-info`, `--_tui-list-models`, `--_tui-config-lines`, all cache-only/no network since fzf invokes them per keystroke).
+- **Config** (`~/.config/quipcli/config.json`): persistent default model; priority: env var > config file > hardcoded fallback. Auto-created with current defaults on first run (`_ensure_config` in `config.py`, called from `main`) so the file always exists and can be hand-edited in place; `qp --config-edit` opens it in `$EDITOR`. Keys: `default_model`, `system_prompt`, `ollama_model`
 - **File writes**: config and model cache written via `_atomic_write_text` (temp + `os.replace`) in `constants.py`; SQLite opened with `timeout=5` + WAL; `$EDITOR` invoked via `subprocess.run` + `shlex.split` (never `os.system`)
 - **System prompt injection** (`_default_system` in `entry.py`): unless `-S` fully overrides it, every call's system prompt is built from mode-specific instructions (execute/code) + `_machine_context()` (recomputed every call — never cached/stored, so one config.json stays correct across different machines) + the optional `system_prompt` key from config.json (free-text standing instructions/preferences)
-- **History** (`~/.local/share/llm-cmd/history.db`): SQLite, one row per LLM call (timestamp, model, tokens, cost, mode)
+- **History** (`~/.local/share/quipcli/history.db`): SQLite, one row per LLM call (timestamp, model, tokens, cost, mode)
 - **Usage stats**: printed to stderr after each response unless `-q/--quiet` or stdout not a TTY; `-q` also silences the informational `Model:`/`Session:` stderr lines
 - **Provider config**: resolved at module level from env vars — changing provider requires no code changes
-- **Entry points**: `llm-cmd`, `llm-cmd-model`, `llm-cmd-status`, `llm-cmd-cost`
+- **Entry point**: `qp` only (`pyproject.toml` → `quipcli:main`)
 
 Branch strategy: `main` = stable tagged releases, `dev/*` = feature branches, merge to main when tests pass.
 
 ## Documentation rule
 
 **Every feature addition or behaviour change must update:**
-1. `_TLDR` in `llm_cmd/docs.py` (quick reference)
-2. `_DOCS` in `llm_cmd/docs.py` (man-page style)
+1. `_TLDR` in `quipcli/docs.py` (quick reference)
+2. `_DOCS` in `quipcli/docs.py` (man-page style)
 3. `README.md` (user-facing)
 4. `CLAUDE.md` Architecture section (this file)
 

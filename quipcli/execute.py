@@ -35,6 +35,20 @@ def _edit_in_editor(command: str, prompt: str) -> str:
         os.unlink(tmpfile)
 
 
+def _edit_text_value(current: str) -> str:
+    """Open $EDITOR on a plain text value (no comment header/stripping —
+    unlike _edit_in_editor, which is specific to shell-command editing)."""
+    editor = os.environ.get("EDITOR", "vi")
+    with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", delete=False) as f:
+        f.write(current)
+        tmpfile = f.name
+    try:
+        subprocess.run([*shlex.split(editor), tmpfile])
+        return Path(tmpfile).read_text().strip()
+    finally:
+        os.unlink(tmpfile)
+
+
 def confirm_and_run(command: str, prompt: str) -> None:
     command = _strip_fences(command)
     while True:
