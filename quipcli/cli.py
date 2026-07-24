@@ -23,14 +23,14 @@ def _execute_prompt() -> str:
 def _package_version() -> str:
     try:
         from importlib.metadata import version
-        return version("llm-cmd")
+        return version("quipcli")
     except Exception:
         return "unknown"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="llm-cmd",
+        prog="qp",
         description="Ask questions or run AI-generated shell commands — no quotes needed.",
         usage="%(prog)s [-e|-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]",
     )
@@ -89,9 +89,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fetch and cache the model list from the provider, then exit.",
     )
     parser.add_argument(
-        "--list-models",
+        "--models",
         action="store_true",
-        help="Print cached model IDs (one per line) and exit.",
+        help="List cached models (* marks the current default), then exit.",
+    )
+    parser.add_argument(
+        "--in", dest="in_filter", default=None, metavar="MODALITIES",
+        help="With --models: comma-separated required input modalities (e.g. image,text).",
+    )
+    parser.add_argument(
+        "--out", dest="out_filter", default=None, metavar="MODALITIES",
+        help="With --models: comma-separated required output modalities (e.g. audio).",
+    )
+    parser.add_argument(
+        "--model-get",
+        action="store_true",
+        help="Print the current default model, then exit.",
+    )
+    parser.add_argument(
+        "--model-set",
+        nargs="?", const="", default=None, metavar="MODEL",
+        help="Set the default model (omit MODEL to pick interactively), then exit.",
+    )
+    parser.add_argument(
+        "--config-edit",
+        action="store_true",
+        help="Open the config file in $EDITOR, then exit.",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Show current configuration and machine context, then exit.",
+    )
+    parser.add_argument(
+        "--cost",
+        nargs="?", const="7d", default=None, metavar="PERIOD",
+        help="Show usage cost summary (1d, 7d default, 30d, or all), then exit.",
+    )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help="Interactive fzf-based picker for models and config (requires fzf).",
+    )
+    parser.add_argument(
+        "--_tui-model-info", dest="tui_model_info", default=None, metavar="MODEL_ID",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--_tui-list-models", dest="tui_list_models", action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--_tui-config-lines", dest="tui_config_lines", action="store_true",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--version",
@@ -141,7 +191,7 @@ def get_content(
         return _build_user_content(args.words, args.input or [], stdin_text or None)
     if stdin_text:
         return stdin_text, set()
-    print("Usage: llm-cmd [words ...]\n       echo 'question' | llm-cmd", file=sys.stderr)
+    print("Usage: qp [words ...]\n       echo 'question' | qp", file=sys.stderr)
     sys.exit(1)
 
 

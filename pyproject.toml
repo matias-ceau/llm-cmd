@@ -1,7 +1,7 @@
 [project]
-name = "llm-cmd"
-version = "0.3.0"
-description = "No-TUI LLM CLI — ask questions and run AI-generated shell commands"
+name = "quipcli"
+version = "0.4.0"
+description = "Minimal LLM CLI — ask questions, run AI-generated shell commands, optional fzf-based --tui"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = ["argcomplete"]
@@ -10,10 +10,7 @@ dependencies = ["argcomplete"]
 dev = ["pytest"]
 
 [project.scripts]
-llm-cmd        = "llm_cmd:main"
-llm-cmd-model  = "llm_cmd:main_model"
-llm-cmd-status = "llm_cmd:main_status"
-llm-cmd-cost   = "llm_cmd:main_cost"
+qp = "quipcli:main"
 
 [build-system]
 requires = ["hatchling"]

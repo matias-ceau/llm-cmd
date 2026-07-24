@@ -31,7 +31,28 @@ from .models import (
     _resolve_model_name,
 )
 from .multimodal import _build_user_content, _encode_file_content, _is_image_url
-from .http_client import _make_request, call_llm_capture, call_llm_streaming
-from .execute import _edit_in_editor, _strip_fences, confirm_and_run
+from .http_client import _make_request, _ollama_models, call_llm_capture, call_llm_streaming
+from .execute import _edit_in_editor, _edit_text_value, _strip_fences, confirm_and_run
 from .cli import _execute_prompt, _print_stats, build_parser, get_content
-from .entry import main, main_cost, main_model, main_status
+from .tui import (
+    _config_lines,
+    _config_view,
+    _fzf_available,
+    _key_from_line,
+    _model_id_from_line,
+    _model_lines,
+    _models_view,
+    _print_model_info,
+    _run_fzf,
+    pick_model_interactive,
+    run_tui,
+)
+from .entry import (
+    _do_config_edit,
+    _do_cost,
+    _do_model_get,
+    _do_model_set,
+    _do_models,
+    _do_status,
+    main,
+)
