@@ -55,17 +55,20 @@ Package: `llm_cmd/` (13 modules)
 
 Key design rules:
 - **Patchable globals** (`_API_KEY`, `_API_URL`, `_MODELS_CACHE`, `_CONFIG_FILE`, `_CONFIG_DIR`, `_HISTORY_DB`, `_DATA_DIR`, `_CACHE_TTL`): live in `constants.py`. All functions that use them reference them via `from . import constants` + `constants._X` (module-qualified lookup), never `from .constants import _X`. This preserves test patchability at `llm_cmd.constants._X`.
-- **HTTP layer** (`_make_request`): direct `http.client` calls, zero third-party deps except `argcomplete`
+- **HTTP layer** (`_make_request`): direct `http.client` calls, zero third-party deps except `argcomplete`; retries with backoff (1s/2s/4s) on connection errors and transient statuses (429/500/502/503/529); supports `http://` endpoints (no API key required for those); returns `(response, model_used)`
+- **Stdin + words** (`get_content` in `cli.py`): piped stdin is appended after the word prompt (blank-line separated) — `git diff | llm-cmd summarize this` sends both; stdin alone is the whole prompt
+- **Ollama fallback** (`_ollama_fallback` in `http_client.py`): when the provider is unreachable after retries, or no API key is set, falls back to local Ollama (`LLM_CMD_OLLAMA_URL`, default `http://localhost:11434`); model from config `ollama_model` or first of `/api/tags` (`_pick_ollama_model`); HTTP status errors (401…) do NOT trigger it
 - **Streaming** (`call_llm_streaming`): SSE parsed line-by-line, tokens printed as received; returns `_UsageStats | None`
 - **Markdown rendering**: chat streaming applies lightweight ANSI markdown styling on TTY (headings, inline/fenced code, bold, list items, blockquotes) without buffering full responses; disabled by `NO_COLOR` or non-TTY output
 - **Execute mode** (`confirm_and_run`): captures full response, strips markdown fences, prompts `[Y/n/e]` (Y is default)
 - **Edit mode**: `e` in confirm_and_run opens `$EDITOR` with the original prompt and proposed command as context (comment lines stripped on save)
 - **Model cache** (`~/.cache/llm-cmd/models.json`): loaded for tab-completion, refreshed every 12h via detached subprocess (`_maybe_update_models_bg`)
 - **Model name resolution** (`_resolve_model_name` in `models.py`): `-m/--model` and `llm-cmd-model set` accept a substring that uniquely matches a cached model id (e.g. `-m haiku`); ambiguous matches list candidates and exit, no match passes the name through unchanged. `llm-cmd-model set` with no argument shows a numbered picker over the cached models.
-- **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback. Auto-created with current defaults on first run (`_ensure_config` in `config.py`, called from `main`/`main_model`/`main_status`) so the file always exists and can be hand-edited in place; `llm-cmd-model edit` opens it in `$EDITOR`
+- **Config** (`~/.config/llm-cmd/config.json`): persistent default model; priority: env var > config file > hardcoded fallback. Auto-created with current defaults on first run (`_ensure_config` in `config.py`, called from `main`/`main_model`/`main_status`) so the file always exists and can be hand-edited in place; `llm-cmd-model edit` opens it in `$EDITOR`. Keys: `default_model`, `system_prompt`, `ollama_model`
+- **File writes**: config and model cache written via `_atomic_write_text` (temp + `os.replace`) in `constants.py`; SQLite opened with `timeout=5` + WAL; `$EDITOR` invoked via `subprocess.run` + `shlex.split` (never `os.system`)
 - **System prompt injection** (`_default_system` in `entry.py`): unless `-S` fully overrides it, every call's system prompt is built from mode-specific instructions (execute/code) + `_machine_context()` (recomputed every call — never cached/stored, so one config.json stays correct across different machines) + the optional `system_prompt` key from config.json (free-text standing instructions/preferences)
 - **History** (`~/.local/share/llm-cmd/history.db`): SQLite, one row per LLM call (timestamp, model, tokens, cost, mode)
-- **Usage stats**: printed to stderr after each response unless `-q/--quiet` or stdout not a TTY
+- **Usage stats**: printed to stderr after each response unless `-q/--quiet` or stdout not a TTY; `-q` also silences the informational `Model:`/`Session:` stderr lines
 - **Provider config**: resolved at module level from env vars — changing provider requires no code changes
 - **Entry points**: `llm-cmd`, `llm-cmd-model`, `llm-cmd-status`, `llm-cmd-cost`
 
