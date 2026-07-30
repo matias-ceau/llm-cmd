@@ -8,6 +8,22 @@ CODE_SYSTEM_PROMPT = (
     "no markdown fences, no prose before or after."
 )
 
+DEFAULT_CHAT_SYSTEM_PROMPT = (
+    "You are a helpful, direct assistant answering from the command line. "
+    "Prefer concise, plain-text answers over hedging or padding; use Markdown "
+    "only where it actually clarifies (code blocks, short lists)."
+)
+
+# {shell} is substituted with the invoking machine's actual $SHELL at request
+# time (see entry.py:_mode_prompt) — never baked in as a literal shell name,
+# so a config.json synced across machines with different shells stays correct.
+DEFAULT_EXECUTE_SYSTEM_PROMPT = (
+    "You are a shell command generator for {shell}. "
+    "Output ONLY a single executable shell command that accomplishes the user's request. "
+    "No explanation. No markdown. No code fences. No newlines. "
+    "Chain multiple steps with && or semicolons if needed."
+)
+
 # Provider config — override via env vars:
 #   LLM_CMD_MODEL   — model name          (e.g. anthropic/claude-3-5-haiku)
 #   LLM_CMD_API_KEY — API key             (falls back to OPENROUTER_API_KEY)
@@ -24,9 +40,10 @@ _CACHE_DIR  = Path(os.environ.get("XDG_CACHE_HOME",  Path.home() / ".cache"))  /
 _CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "quipcli"
 _DATA_DIR   = Path(os.environ.get("XDG_DATA_HOME",   Path.home() / ".local" / "share")) / "quipcli"
 
-_MODELS_CACHE = _CACHE_DIR  / "models.json"
-_CONFIG_FILE  = _CONFIG_DIR / "config.json"
-_HISTORY_DB   = _DATA_DIR   / "history.db"
+_MODELS_CACHE   = _CACHE_DIR  / "models.json"
+_RANKINGS_CACHE = _CACHE_DIR  / "rankings.json"
+_CONFIG_FILE    = _CONFIG_DIR / "config.json"
+_HISTORY_DB     = _DATA_DIR   / "history.db"
 
 _CACHE_TTL = 43200
 _SSL_CTX   = ssl.create_default_context()

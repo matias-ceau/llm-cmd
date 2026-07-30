@@ -3,21 +3,15 @@ import os
 import sys
 
 from .config import DEFAULT_MODEL
-from .constants import CODE_SYSTEM_PROMPT
+from .constants import DEFAULT_EXECUTE_SYSTEM_PROMPT
 from .db import _UsageStats
 from .models import _load_models
 from .multimodal import _build_user_content
 
 
 def _execute_prompt() -> str:
-    shell = os.environ.get("SHELL", "/bin/bash")
-    shell = os.path.basename(shell)
-    return (
-        f"You are a shell command generator for {shell}. "
-        "Output ONLY a single executable shell command that accomplishes the user's request. "
-        "No explanation. No markdown. No code fences. No newlines. "
-        "Chain multiple steps with && or semicolons if needed."
-    )
+    shell = os.path.basename(os.environ.get("SHELL", "/bin/bash"))
+    return DEFAULT_EXECUTE_SYSTEM_PROMPT.replace("{shell}", shell)
 
 
 def _package_version() -> str:
@@ -87,6 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--update-models",
         action="store_true",
         help="Fetch and cache the model list from the provider, then exit.",
+    )
+    parser.add_argument(
+        "--update-rankings",
+        action="store_true",
+        help="Fetch OpenRouter's top-50 daily usage ranking (needs an OpenRouter "
+             "API key), then exit. Usage volume, not a quality score.",
     )
     parser.add_argument(
         "--models",

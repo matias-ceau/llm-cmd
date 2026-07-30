@@ -84,6 +84,78 @@ def _fetch_models() -> list[str]:
     return sorted(m["id"] for m in data.get("data", []))
 
 
+_RANKINGS_HOST = "openrouter.ai"
+_RANKINGS_PATH = "/api/v1/datasets/rankings-daily"
+
+
+def _fetch_rankings() -> list[dict]:
+    """Fetch OpenRouter's top-50-models-by-daily-tokens dataset and cache the
+    most recent day's ranking. This is a usage-volume signal (how much
+    traffic a model gets on OpenRouter), not a quality/intelligence score —
+    OpenRouter doesn't publish one. Only meaningful against OpenRouter
+    itself, and requires an API key (unlike the public /models endpoint)."""
+    if constants._API_URL != constants._DEFAULT_API_URL:
+        print("Error: --update-rankings only supports OpenRouter (the default provider).", file=sys.stderr)
+        return []
+    if not constants._API_KEY:
+        print("Error: --update-rankings requires an OpenRouter API key.", file=sys.stderr)
+        return []
+    conn = http.client.HTTPSConnection(_RANKINGS_HOST, context=constants._SSL_CTX, timeout=30)
+    try:
+        conn.request("GET", _RANKINGS_PATH, headers={"Authorization": f"Bearer {constants._API_KEY}"})
+        resp = conn.getresponse()
+    except OSError as e:
+        print(f"Error: connection failed: {e}", file=sys.stderr)
+        return []
+    if resp.status != 200:
+        print(f"Error: failed to fetch rankings: HTTP {resp.status}", file=sys.stderr)
+        return []
+    try:
+        payload = json.loads(resp.read().decode())
+    except json.JSONDecodeError:
+        print("Error: invalid JSON in rankings response.", file=sys.stderr)
+        return []
+
+    rows = payload.get("data", [])
+    latest_date = max((r["date"] for r in rows if "date" in r), default=None)
+    latest = [
+        r for r in rows
+        if r.get("date") == latest_date and r.get("model_permaslug") != "other"
+    ]
+    latest.sort(key=lambda r: int(r.get("total_tokens", 0) or 0), reverse=True)
+    ranked = [
+        {
+            "rank": i + 1,
+            "model_permaslug": r["model_permaslug"],
+            "total_tokens": int(r.get("total_tokens", 0) or 0),
+        }
+        for i, r in enumerate(latest)
+    ]
+    constants._CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    constants._atomic_write_text(
+        constants._RANKINGS_CACHE, json.dumps({"date": latest_date, "data": ranked})
+    )
+    return ranked
+
+
+def _load_rankings() -> dict:
+    if not constants._RANKINGS_CACHE.exists():
+        return {}
+    try:
+        return json.loads(constants._RANKINGS_CACHE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _ranking_for(permaslug: str) -> dict | None:
+    if not permaslug:
+        return None
+    for row in _load_rankings().get("data", []):
+        if row.get("model_permaslug") == permaslug:
+            return row
+    return None
+
+
 def _resolve_model_name(name: str) -> str:
     """Resolve a partial/substring model name against the cache.
 

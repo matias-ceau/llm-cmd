@@ -22,12 +22,18 @@ qp — quick reference
   qp --model-set haiku                 set by unique substring match
   qp --model-set                       pick a model (fzf if available, else a numbered list)
   qp --config-edit                     open ~/.config/quipcli/config.json in $EDITOR
-                                        (add "system_prompt" for standing instructions)
+                                        (chat/execute/code_system_prompt are
+                                        seeded with editable defaults; add
+                                        "system_prompt" for standing instructions)
   qp --tui                             interactive fzf picker for models + config
   qp --status                          show current configuration + machine context
   qp --cost [1d|7d|30d|all]            show cost summary (default 7d)
 
   qp --update-models                   refresh model cache from provider
+  qp --update-rankings                 cache OpenRouter's top-50 usage ranking
+                                        (needs an OpenRouter API key; usage
+                                        volume, not a quality score — shown in
+                                        --tui's model preview when cached)
   qp --version                         show version
   qp --tldr                            this cheatsheet
   qp --docs                            full documentation
@@ -44,7 +50,7 @@ NAME
 
 SYNOPSIS
     qp [-e|-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
-    qp --update-models | --models [--in MOD] [--out MOD] | --model-get | --model-set [MODEL]
+    qp --update-models | --update-rankings | --models [--in MOD] [--out MOD] | --model-get | --model-set [MODEL]
     qp --config-edit | --status | --cost [PERIOD] | --tui
     qp --tldr | --docs | --version
 
@@ -95,6 +101,15 @@ OPTIONS
                         and the informational Model:/Session: stderr lines.
 
     --update-models     Fetch and cache the model list from the provider, then exit.
+
+    --update-rankings   Fetch and cache OpenRouter's top-50-models-by-daily-tokens
+                        ranking, then exit. Requires an OpenRouter API key (the
+                        public /models endpoint doesn't need one; this dataset
+                        does) and only works against OpenRouter itself, not
+                        other OpenAI-compatible providers. This is a usage-volume
+                        signal, not a quality/intelligence score — OpenRouter
+                        doesn't publish one. When cached, --tui's model preview
+                        shows the model's rank and daily token count.
 
     --models            List cached models (* marks the current default), then exit.
       --in MOD,MOD       Filter by required input modalities (comma-separated).
@@ -154,19 +169,22 @@ TUI (--tui)
 
       Models   Fuzzy list of cached models, current default marked with *.
                Right-hand preview: name, context length, price per 1M
-               tokens (prompt/completion), input/output modalities.
-               Enter sets the highlighted model as the new default.
-               ctrl-r refreshes the cache from the provider in place.
+               tokens (prompt/completion), input/output modalities, usage
+               rank (only if --update-rankings has been run), and the
+               model's description from the provider. Enter sets the
+               highlighted model as the new default. ctrl-r refreshes the
+               cache from the provider in place.
 
-      Config   Fuzzy list of editable keys (default_model, system_prompt,
-               ollama_model). Right-hand preview shows the live config.json
+      Config   Fuzzy list of editable keys: default_model, chat_system_prompt,
+               execute_system_prompt, code_system_prompt, system_prompt,
+               ollama_model. Right-hand preview shows the live config.json
                via bat. Enter on default_model drills into the Models list;
                on ollama_model, into a list of locally available Ollama
                models (falls back to free-text entry if Ollama is
-               unreachable); on system_prompt, opens $EDITOR on just that
-               value. ctrl-e opens the whole config file in $EDITOR at any
-               time. Esc returns to the previous list; Esc at the top menu
-               exits.
+               unreachable); on any *_system_prompt key, opens $EDITOR on
+               just that value. ctrl-e opens the whole config file in
+               $EDITOR at any time. Esc returns to the previous list; Esc
+               at the top menu exits.
 
 OLLAMA FALLBACK
     When the provider is unreachable (after retries) or no API key is set,
@@ -194,24 +212,44 @@ ENVIRONMENT
 CONTEXT INJECTION
     Unless -S/--system fully overrides it, every request's system prompt is
     built from up to three parts, in order:
-      1. mode-specific instructions (execute/code mode only)
+      1. the per-mode prompt for the mode in use — chat_system_prompt,
+         execute_system_prompt, or code_system_prompt in config.json. These
+         three keys are seeded with sensible defaults the first time qp
+         runs (or on upgrade, for any missing key), so they're plain,
+         editable JSON — not buried in Python source — from the start.
+         execute_system_prompt may contain the literal placeholder
+         "{shell}", substituted with the invoking machine's actual $SHELL
+         at request time (never baked in as a fixed name), so a
+         config.json synced across machines with different shells stays
+         correct. Editing these only changes wording/tone — the hard
+         constraints they describe (e.g. "no markdown fences" for -e) are
+         also enforced in code: confirm_and_run() strips ``` fences from
+         -e output regardless of what the model or the prompt says.
       2. machine context — OS/distro, $SHELL, architecture — computed fresh
          on every call, so the same config.json works correctly across
          different machines without editing it per host
       3. the "system_prompt" key from config.json, if set — free-text
-         instructions/preferences that should apply to every call (e.g.
-         "prefer pacman over apt-get", "I use zsh and neovim")
+         instructions/preferences that should apply to every call regardless
+         of mode (e.g. "prefer pacman over apt-get", "I use zsh and neovim")
 
     Set persistent instructions with:
-        qp --config-edit          # add "system_prompt": "..." to config.json
-        qp --tui                  # or interactively, via Config > system_prompt
+        qp --config-edit          # edit chat/execute/code_system_prompt,
+                                   # or add "system_prompt": "..."
+        qp --tui                  # or interactively, via Config
 
 FILES
     ~/.config/quipcli/config.json       Persistent config: default_model,
-                                         system_prompt, ollama_model.
-                                         Auto-created on first run; edit it
+                                         chat_system_prompt,
+                                         execute_system_prompt,
+                                         code_system_prompt, system_prompt,
+                                         ollama_model. Auto-created on first
+                                         run (the four prompt keys are
+                                         seeded with defaults); edit it
                                          directly or via `qp --config-edit`.
     ~/.cache/quipcli/models.json        Cached model list (12h TTL).
+    ~/.cache/quipcli/rankings.json      Cached OpenRouter usage ranking
+                                         (only present after
+                                         `qp --update-rankings`).
     ~/.local/share/quipcli/history.db   Usage history + sessions (SQLite).
 
     On first run, if the above don't exist yet but a pre-rename

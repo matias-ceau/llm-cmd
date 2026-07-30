@@ -276,6 +276,35 @@ class TestExecutePrompt:
         assert "No code fences" in prompt
 
 
+# ── _mode_prompt ──────────────────────────────────────────────────────────────
+
+class TestModePrompt:
+    def test_falls_back_to_default_for_chat(self):
+        assert quipcli._mode_prompt({}, "chat") == quipcli.DEFAULT_CHAT_SYSTEM_PROMPT
+
+    def test_falls_back_to_default_for_code(self):
+        assert quipcli._mode_prompt({}, "code") == quipcli.CODE_SYSTEM_PROMPT
+
+    def test_uses_config_override(self):
+        cfg = {"code_system_prompt": "custom code prompt"}
+        assert quipcli._mode_prompt(cfg, "code") == "custom code prompt"
+
+    def test_blank_config_value_falls_back_to_default(self):
+        cfg = {"chat_system_prompt": ""}
+        assert quipcli._mode_prompt(cfg, "chat") == quipcli.DEFAULT_CHAT_SYSTEM_PROMPT
+
+    def test_default_execute_prompt_substitutes_current_shell(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/bin/fish")
+        result = quipcli._mode_prompt({}, "execute")
+        assert "fish" in result
+        assert "{shell}" not in result
+
+    def test_custom_execute_prompt_shell_placeholder_also_substituted(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/bin/zsh")
+        cfg = {"execute_system_prompt": "Shell is {shell}, be terse."}
+        assert quipcli._mode_prompt(cfg, "execute") == "Shell is zsh, be terse."
+
+
 # ── _models_url ───────────────────────────────────────────────────────────────
 
 class TestModelsUrl:
@@ -422,6 +451,69 @@ class TestMaybeUpdateModelsBg:
         assert kwargs.get("stdout") == subprocess.DEVNULL
         assert kwargs.get("stdin") == subprocess.DEVNULL
         assert "_LLM_CMD_BG_UPDATE" in kwargs.get("env", {})
+
+
+# ── _fetch_rankings / _load_rankings / _ranking_for ─────────────────────────────
+
+class TestFetchRankings:
+    def test_success_caches_latest_day_sorted_desc(self, tmp_path, mock_http):
+        body = json.dumps({"data": [
+            {"date": "2026-07-22", "model_permaslug": "openai/gpt-4o", "total_tokens": "999"},
+            {"date": "2026-07-23", "model_permaslug": "other", "total_tokens": "500"},
+            {"date": "2026-07-23", "model_permaslug": "anthropic/claude-3-5-sonnet", "total_tokens": "200"},
+            {"date": "2026-07-23", "model_permaslug": "openai/gpt-4o", "total_tokens": "800"},
+        ]}).encode()
+        mock_http(MockHTTPResponse(200, body))
+        cache = tmp_path / "rankings.json"
+        with patch("quipcli.constants._RANKINGS_CACHE", cache), \
+             patch("quipcli.constants._CACHE_DIR", tmp_path), \
+             patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL):
+            ranked = quipcli._fetch_rankings()
+        assert ranked == [
+            {"rank": 1, "model_permaslug": "openai/gpt-4o", "total_tokens": 800},
+            {"rank": 2, "model_permaslug": "anthropic/claude-3-5-sonnet", "total_tokens": 200},
+        ]
+        assert json.loads(cache.read_text())["date"] == "2026-07-23"
+
+    def test_skips_non_openrouter_provider(self):
+        with patch("quipcli.constants._API_URL", "https://api.groq.com/openai/v1/chat/completions"), \
+             patch("quipcli.constants._API_KEY", "key"):
+            assert quipcli._fetch_rankings() == []
+
+    def test_skips_without_api_key(self):
+        with patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL), \
+             patch("quipcli.constants._API_KEY", ""):
+            assert quipcli._fetch_rankings() == []
+
+    def test_non_200_returns_empty(self, mock_http):
+        mock_http(MockHTTPResponse(401, b"unauthorized"))
+        with patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL):
+            assert quipcli._fetch_rankings() == []
+
+    def test_invalid_json_returns_empty(self, mock_http):
+        mock_http(MockHTTPResponse(200, b"not json{{"))
+        with patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL):
+            assert quipcli._fetch_rankings() == []
+
+
+class TestRankingFor:
+    def test_returns_none_when_no_cache(self, tmp_path):
+        with patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "missing.json"):
+            assert quipcli._ranking_for("openai/gpt-4o") is None
+
+    def test_empty_permaslug_returns_none(self, tmp_path):
+        with patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "missing.json"):
+            assert quipcli._ranking_for("") is None
+
+    def test_finds_matching_permaslug(self, tmp_path):
+        cache = tmp_path / "rankings.json"
+        cache.write_text(json.dumps({"date": "2026-07-23", "data": [
+            {"rank": 1, "model_permaslug": "openai/gpt-4o", "total_tokens": 100},
+        ]}))
+        with patch("quipcli.constants._RANKINGS_CACHE", cache):
+            assert quipcli._ranking_for("openai/gpt-4o") == {
+                "rank": 1, "model_permaslug": "openai/gpt-4o", "total_tokens": 100,
+            }
 
 
 # ── HTTP layer ────────────────────────────────────────────────────────────────
@@ -954,6 +1046,36 @@ class TestConfig:
         assert cfg == {"default_model": "custom/model"}
 
 
+# ── _seed_defaults ────────────────────────────────────────────────────────────
+
+class TestSeedDefaults:
+    def test_writes_missing_keys(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "x"}))
+        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
+             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+            cfg = quipcli._seed_defaults({"chat_system_prompt": "be nice"})
+        assert cfg["chat_system_prompt"] == "be nice"
+        assert json.loads(cfg_file.read_text())["chat_system_prompt"] == "be nice"
+
+    def test_does_not_overwrite_existing_key(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"chat_system_prompt": "custom"}))
+        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
+             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+            quipcli._seed_defaults({"chat_system_prompt": "default"})
+        assert json.loads(cfg_file.read_text())["chat_system_prompt"] == "custom"
+
+    def test_noop_write_when_nothing_missing(self, tmp_path):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"a": "1"}))
+        mtime_before = cfg_file.stat().st_mtime_ns
+        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
+             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+            quipcli._seed_defaults({"a": "ignored"})
+        assert cfg_file.stat().st_mtime_ns == mtime_before
+
+
 # ── Machine context ───────────────────────────────────────────────────────────
 
 class TestMachineContext:
@@ -1397,9 +1519,9 @@ class TestTuiHelpers:
 
     def test_config_lines_shows_not_set(self):
         lines = quipcli._config_lines({})
-        assert "default_model = (not set)" in lines
-        assert "system_prompt = (not set)" in lines
-        assert "ollama_model = (not set)" in lines
+        for key in ("default_model", "system_prompt", "ollama_model"):
+            line = next(l for l in lines if quipcli._key_from_line(l) == key)
+            assert line.endswith("= (not set)")
 
     def test_config_lines_truncates_long_values(self):
         lines = quipcli._config_lines({"system_prompt": "x" * 100})
@@ -1415,7 +1537,9 @@ class TestTuiHelpers:
         with patch("quipcli.constants._MODELS_CACHE", cache), \
              patch("quipcli.constants._CONFIG_FILE", cfg_file):
             lines = quipcli._model_lines()
-        assert lines == ["  a", "* b"]
+        assert lines[0] == "  a"
+        assert quipcli._model_id_from_line(lines[1]) == "b"
+        assert "\033[32m" in lines[1]
 
 
 class TestTuiModelInfo:
@@ -1446,6 +1570,47 @@ class TestTuiModelInfo:
         out = capsys.readouterr().out
         assert "id: unknown/model" in out
         assert "no cached details" in out
+
+    def test_prints_wrapped_description(self, tmp_path, capsys):
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{
+            "id": "openai/gpt-4o-mini",
+            "name": "GPT-4o mini",
+            "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
+            "description": "word " * 40,
+            "pricing": {}, "architecture": {},
+        }]}))
+        with patch("quipcli.constants._MODELS_CACHE", cache), \
+             patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "rankings.json"):
+            quipcli._print_model_info("  openai/gpt-4o-mini")
+        out = capsys.readouterr().out
+        assert "word word" in out
+        assert all(len(line) <= 70 for line in out.splitlines())
+
+    def test_prints_usage_rank_when_cached(self, tmp_path, capsys):
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{
+            "id": "openai/gpt-4o-mini",
+            "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
+            "pricing": {}, "architecture": {},
+        }]}))
+        rankings = tmp_path / "rankings.json"
+        rankings.write_text(json.dumps({"date": "2026-07-23", "data": [
+            {"rank": 3, "model_permaslug": "openai/gpt-4o-mini-2024-07-18", "total_tokens": 42_000_000},
+        ]}))
+        with patch("quipcli.constants._MODELS_CACHE", cache), \
+             patch("quipcli.constants._RANKINGS_CACHE", rankings):
+            quipcli._print_model_info("  openai/gpt-4o-mini")
+        out = capsys.readouterr().out
+        assert "usage_rank: #3 of top 50" in out
+        assert "42,000,000 tokens/day" in out
+
+    def test_no_usage_rank_line_without_cache(self, tmp_path, capsys):
+        with patch("quipcli.constants._MODELS_CACHE", self._cache(tmp_path)), \
+             patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "missing-rankings.json"):
+            quipcli._print_model_info("* openai/gpt-4o-mini")
+        out = capsys.readouterr().out
+        assert "usage_rank" not in out
 
 
 class TestModelsView:
@@ -1508,6 +1673,29 @@ class TestConfigView:
              patch("quipcli.tui._edit_text_value", return_value="prefer pacman"):
             quipcli._config_view()
         assert json.loads(cfg_file.read_text())["system_prompt"] == "prefer pacman"
+
+    @pytest.mark.parametrize("key", ["chat_system_prompt", "execute_system_prompt", "code_system_prompt"])
+    def test_mode_prompt_keys_are_editable(self, tmp_path, key):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text("{}")
+        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
+             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
+             patch("quipcli.tui._run_fzf", side_effect=[f"{key} = (not set)", None]), \
+             patch("quipcli.tui._edit_text_value", return_value="be terse"):
+            quipcli._config_view()
+        assert json.loads(cfg_file.read_text())[key] == "be terse"
+
+    def test_config_keys_include_all_mode_prompts_and_are_listed(self):
+        assert quipcli._config_lines({})[0].startswith("default_model")
+        keys = [quipcli._key_from_line(l) for l in quipcli._config_lines({})]
+        assert keys == [
+            "default_model",
+            "chat_system_prompt",
+            "execute_system_prompt",
+            "code_system_prompt",
+            "system_prompt",
+            "ollama_model",
+        ]
 
     def test_default_model_drills_into_models_view(self, tmp_path):
         cfg_file = tmp_path / "config.json"

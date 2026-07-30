@@ -52,6 +52,7 @@ qp [-e] [-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
 | `--cost [PERIOD]` | Usage cost summary (`1d`/`7d`/`30d`/`all`) |
 | `--tui` | Interactive fzf-based picker for models and config — see below |
 | `--update-models` | Force-refresh model cache |
+| `--update-rankings` | Cache OpenRouter's top-50 daily usage ranking (needs an OpenRouter key; usage volume, not a quality score — shown in `--tui`'s model preview once cached) |
 | `--version` | Print version |
 
 Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold, list items, blockquotes) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
@@ -76,8 +77,8 @@ qp --tui
 
 Shells out to the real `fzf` (and `bat`, for preview syntax highlighting) — no reimplemented fuzzy-finder, and it inherits your existing `FZF_DEFAULT_OPTS` if you have one.
 
-- **Models** — fuzzy list of cached models, current default marked `*`. The preview pane shows name, context length, price per 1M tokens (prompt/completion), and input/output modalities. `Enter` sets the highlighted model as the new default; `ctrl-r` refreshes the cache from the provider without leaving the picker.
-- **Config** — fuzzy list of editable keys (`default_model`, `system_prompt`, `ollama_model`), with the live `config.json` shown via `bat` on the right. `Enter` on `default_model` drills into the Models list; on `ollama_model`, into a list of locally available Ollama models (falls back to free-text entry if Ollama is unreachable); on `system_prompt`, opens `$EDITOR` on just that value. `ctrl-e` opens the whole config file in `$EDITOR` at any time.
+- **Models** — fuzzy list of cached models, current default marked `*`. The preview pane shows name, context length, price per 1M tokens (prompt/completion), input/output modalities, usage rank (once `qp --update-rankings` has been run), and the model's description from the provider. `Enter` sets the highlighted model as the new default; `ctrl-r` refreshes the cache from the provider without leaving the picker.
+- **Config** — fuzzy list of editable keys (`default_model`, `chat_system_prompt`, `execute_system_prompt`, `code_system_prompt`, `system_prompt`, `ollama_model`), with the live `config.json` shown via `bat` on the right. `Enter` on `default_model` drills into the Models list; on `ollama_model`, into a list of locally available Ollama models (falls back to free-text entry if Ollama is unreachable); on any `*_system_prompt` key, opens `$EDITOR` on just that value. `ctrl-e` opens the whole config file in `$EDITOR` at any time.
 
 `Esc` steps back one level; `Esc` at the top menu exits. Requires `fzf` to be installed — `qp --model-set` (no value) also uses this picker when `fzf` is available, falling back to a plain numbered prompt otherwise.
 
@@ -106,9 +107,9 @@ Environment variables always take priority over the config file:
 
 Every request (unless `-S` fully overrides the system prompt) automatically gets:
 
-1. mode-specific instructions (execute/code mode)
+1. the **per-mode prompt** for whichever mode is active — `chat_system_prompt`, `execute_system_prompt`, or `code_system_prompt` in `config.json`. These are seeded with sensible defaults the first time `qp` runs (or on upgrade, for any key missing from an existing config), so they're plain editable JSON from the start, not buried in the Python source. `execute_system_prompt` may contain the literal placeholder `{shell}`, substituted with the invoking machine's actual `$SHELL` at request time — never baked in as a fixed name, so a `config.json` synced across machines with different shells stays correct. Editing these only changes wording/tone: the hard constraint they describe (no markdown fences in `-e` output) is also enforced in code, independent of what the prompt says.
 2. **machine context** — OS/distro, `$SHELL`, architecture — detected fresh on every call, so the same `config.json` is correct whether it's synced to an Arch box or a Mac. No more reminding the model what OS you're on.
-3. a free-text `"system_prompt"` from `config.json`, if you set one — standing instructions/preferences applied to every call:
+3. a free-text `"system_prompt"` from `config.json`, if you set one — standing instructions/preferences applied to every call regardless of mode:
 
 ```bash
 qp --config-edit
