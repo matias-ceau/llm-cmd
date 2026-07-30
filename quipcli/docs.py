@@ -7,7 +7,11 @@ qp — quick reference
   qp -i photo.jpg what is this         multimodal: explicit file input
   qp -e update all cargo bins          generate + confirm + run a shell command
   qp -c write a merge sort             generate code to stdout
+  qp -a find and fix the failing test  agent mode: multi-turn tool-calling loop
+  qp -a --no-web ...                   agent mode without hosted web search/fetch
   qp -m anthropic/claude-3 ...         use a specific model
+  qp -m openrouter/auto-beta ...       Auto Router: picks a model per-prompt
+  qp -m openrouter/pareto-code -c ...  Pareto Router: best coder for the price
   qp -q ...                            suppress usage stats
   NO_COLOR=1 qp ...                    disable ANSI markdown styling
   qp -s myconv ask something           start or continue a named session
@@ -22,7 +26,7 @@ qp — quick reference
   qp --model-set haiku                 set by unique substring match
   qp --model-set                       pick a model (fzf if available, else a numbered list)
   qp --config-edit                     open ~/.config/quipcli/config.json in $EDITOR
-                                        (chat/execute/code_system_prompt are
+                                        (chat/execute/code/agent_system_prompt are
                                         seeded with editable defaults; add
                                         "system_prompt" for standing instructions)
   qp --tui                             interactive fzf picker for models + config
@@ -49,7 +53,7 @@ NAME
     qp — minimal CLI for LLMs, with an optional fzf-based --tui
 
 SYNOPSIS
-    qp [-e|-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
+    qp [-e|-c|-a] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
     qp --update-models | --update-rankings | --models [--in MOD] [--out MOD] | --model-get | --model-set [MODEL]
     qp --config-edit | --status | --cost [PERIOD] | --tui
     qp --tldr | --docs | --version
@@ -78,6 +82,14 @@ OPTIONS
                         Press e to open the command in $EDITOR with context.
 
     -c, --code          Code mode: generate raw code to stdout (no prose).
+
+    -a, --agent         Agent mode: multi-turn tool-calling loop instead of a
+                        single reply — see AGENT MODE below.
+
+    --max-steps N       With -a: max tool-calling loop iterations (default: 12).
+
+    --no-web            With -a: disable the hosted web search/fetch tools
+                        for this call.
 
     -m, --model MODEL   Model to use for this invocation. MODEL may be a substring
                         that uniquely matches a cached model id (e.g. "haiku");
@@ -152,6 +164,47 @@ MULTIMODAL
     If the selected model does not support the required input modality, qp
     prints an error and lists compatible models from the cache.
 
+AGENT MODE (-a)
+    Runs a multi-turn tool-calling loop (OpenAI-style function calling over
+    the same /chat/completions endpoint used everywhere else) instead of a
+    single reply, so it can go beyond oneliners. Available tools:
+
+      run_shell       Run a shell command and return stdout/stderr.
+                       Prompts [Y/n] before running — same confirm-first
+                       posture as -e. Declining tells the model to try a
+                       different approach rather than aborting the run.
+      read_file        Read a local text file. No confirmation.
+      write_file       Write text to a local file (creates parent dirs).
+                       Prompts [Y/n] before writing.
+      web search/fetch OpenRouter's hosted openrouter:web_search /
+                       openrouter:web_fetch server tools (unless --no-web).
+                       These run entirely on OpenRouter's side — no local
+                       code, no extra config, billed as normal API usage.
+
+    The loop stops after --max-steps iterations (default 12) if the model
+    hasn't produced a final answer yet, returning whatever it has so far.
+    Token/cost usage accumulates across all steps into one usage-stats line.
+
+    The system prompt for this mode is agent_system_prompt in config.json,
+    seeded like chat/execute/code_system_prompt — edit with --config-edit
+    or --tui.
+
+MODEL ROUTING
+    -m/--model passes its argument straight through to the API, so
+    OpenRouter's own routing features and model-variant suffixes already
+    work with no qp-specific flag:
+
+      qp -m openrouter/auto-beta ...        Auto Router — picks a model
+                                              per-prompt from live usage data
+      qp -m openrouter/pareto-code -c ...   Pareto Router — best coding
+                                              model for the price
+      qp -m "MODEL:thinking" ...            :thinking / :nitro / :extended /
+                                              :free model-variant suffixes
+
+    See https://openrouter.ai/docs/guides/routing for details. Persist any
+    of these as your default the same way as any other model name:
+    qp --model-set openrouter/auto-beta.
+
 SESSIONS
     Sessions group messages into multi-turn conversations. Each exchange
     (without -s/-f) is a standalone interaction stored in history.
@@ -176,8 +229,8 @@ TUI (--tui)
                cache from the provider in place.
 
       Config   Fuzzy list of editable keys: default_model, chat_system_prompt,
-               execute_system_prompt, code_system_prompt, system_prompt,
-               ollama_model. Right-hand preview shows the live config.json
+               execute_system_prompt, code_system_prompt, agent_system_prompt,
+               system_prompt, ollama_model. Right-hand preview shows the live config.json
                via bat. Enter on default_model drills into the Models list;
                on ollama_model, into a list of locally available Ollama
                models (falls back to free-text entry if Ollama is
@@ -213,9 +266,9 @@ CONTEXT INJECTION
     Unless -S/--system fully overrides it, every request's system prompt is
     built from up to three parts, in order:
       1. the per-mode prompt for the mode in use — chat_system_prompt,
-         execute_system_prompt, or code_system_prompt in config.json. These
-         three keys are seeded with sensible defaults the first time qp
-         runs (or on upgrade, for any missing key), so they're plain,
+         execute_system_prompt, code_system_prompt, or agent_system_prompt
+         in config.json. These four keys are seeded with sensible defaults
+         the first time qp runs (or on upgrade, for any missing key), so they're plain,
          editable JSON — not buried in Python source — from the start.
          execute_system_prompt may contain the literal placeholder
          "{shell}", substituted with the invoking machine's actual $SHELL
@@ -233,7 +286,7 @@ CONTEXT INJECTION
          of mode (e.g. "prefer pacman over apt-get", "I use zsh and neovim")
 
     Set persistent instructions with:
-        qp --config-edit          # edit chat/execute/code_system_prompt,
+        qp --config-edit          # edit chat/execute/code/agent_system_prompt,
                                    # or add "system_prompt": "..."
         qp --tui                  # or interactively, via Config
 
@@ -241,7 +294,8 @@ FILES
     ~/.config/quipcli/config.json       Persistent config: default_model,
                                          chat_system_prompt,
                                          execute_system_prompt,
-                                         code_system_prompt, system_prompt,
+                                         code_system_prompt,
+                                         agent_system_prompt, system_prompt,
                                          ollama_model. Auto-created on first
                                          run (the four prompt keys are
                                          seeded with defaults); edit it

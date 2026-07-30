@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qp",
         description="Ask questions or run AI-generated shell commands — no quotes needed.",
-        usage="%(prog)s [-e|-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]",
+        usage="%(prog)s [-e|-c|-a] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]",
     )
     parser.add_argument(
         "words",
@@ -42,6 +42,23 @@ def build_parser() -> argparse.ArgumentParser:
         "-c", "--code",
         action="store_true",
         help="Code mode: generate code and print to stdout.",
+    )
+    parser.add_argument(
+        "-a", "--agent",
+        action="store_true",
+        help="Agent mode: multi-turn tool-calling loop (shell, file read/write, web search/fetch).",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=12,
+        metavar="N",
+        help="With -a/--agent: max tool-calling loop iterations (default: 12).",
+    )
+    parser.add_argument(
+        "--no-web",
+        action="store_true",
+        help="With -a/--agent: disable the hosted web search/fetch tools for this call.",
     )
     model_arg = parser.add_argument(
         "-m", "--model",

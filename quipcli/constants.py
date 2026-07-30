@@ -24,6 +24,16 @@ DEFAULT_EXECUTE_SYSTEM_PROMPT = (
     "Chain multiple steps with && or semicolons if needed."
 )
 
+DEFAULT_AGENT_SYSTEM_PROMPT = (
+    "You are a terminal assistant with tools: run_shell (execute a shell "
+    "command), read_file, write_file, and web search/fetch for current "
+    "information. The user must explicitly confirm every run_shell and "
+    "write_file call before it happens, and may decline — if declined, "
+    "adapt and try another approach rather than repeating the same call. "
+    "Prefer the fewest tool calls that get the job done; give a concise, "
+    "direct final answer once you have what you need."
+)
+
 # Provider config — override via env vars:
 #   LLM_CMD_MODEL   — model name          (e.g. anthropic/claude-3-5-haiku)
 #   LLM_CMD_API_KEY — API key             (falls back to OPENROUTER_API_KEY)

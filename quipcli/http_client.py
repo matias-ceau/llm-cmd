@@ -105,11 +105,18 @@ def _make_request(
     model: str,
     stream: bool,
     include_usage: bool = False,
+    extra: dict | None = None,
 ) -> tuple[http.client.HTTPResponse, str]:
-    """Returns (response, model actually used — may differ on Ollama fallback)."""
+    """Returns (response, model actually used — may differ on Ollama fallback).
+
+    `extra` merges additional top-level request fields (e.g. {"tools": [...],
+    "max_tool_calls": 30}) into the body — used by agent.py's tool-calling
+    loop without adding a long, ever-growing list of named parameters here."""
     body_dict: dict = {"model": model, "messages": messages, "stream": stream}
     if stream and include_usage:
         body_dict["stream_options"] = {"include_usage": True}
+    if extra:
+        body_dict.update(extra)
     body = json.dumps(body_dict)
     is_local = urlparse(constants._API_URL).scheme == "http"
 

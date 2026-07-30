@@ -17,10 +17,14 @@ _CONFIG_KEYS = [
     "chat_system_prompt",
     "execute_system_prompt",
     "code_system_prompt",
+    "agent_system_prompt",
     "system_prompt",
     "ollama_model",
 ]
-_PROMPT_KEYS = {"chat_system_prompt", "execute_system_prompt", "code_system_prompt", "system_prompt"}
+_PROMPT_KEYS = {
+    "chat_system_prompt", "execute_system_prompt", "code_system_prompt",
+    "agent_system_prompt", "system_prompt",
+}
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 

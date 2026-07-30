@@ -2,6 +2,7 @@ import os
 import sys
 
 from . import constants
+from .agent import run_agent_loop
 from .cli import _print_stats, build_parser, get_content
 from .config import _ensure_config, _load_config, _resolve_default_model, _save_config, _seed_defaults
 from .context import _machine_context
@@ -23,6 +24,7 @@ _MODE_PROMPT_DEFAULTS = {
     "chat": constants.DEFAULT_CHAT_SYSTEM_PROMPT,
     "execute": constants.DEFAULT_EXECUTE_SYSTEM_PROMPT,
     "code": constants.CODE_SYSTEM_PROMPT,
+    "agent": constants.DEFAULT_AGENT_SYSTEM_PROMPT,
 }
 
 
@@ -287,6 +289,15 @@ def main() -> None:
         cmd, stats = call_llm_capture(msgs, args.model)
         _post(cmd, stats, "execute")
         confirm_and_run(cmd, prompt_text)
+    elif args.agent:
+        msgs = _build_messages(args.system or _default_system("agent"))
+        text, stats = run_agent_loop(
+            msgs,
+            args.model,
+            max_steps=args.max_steps,
+            server_tools=not args.no_web,
+        )
+        _post(text, stats, "agent")
     elif args.code:
         msgs = _build_messages(args.system or _default_system("code"))
         text, stats = call_llm_streaming(
