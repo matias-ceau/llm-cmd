@@ -2,9 +2,9 @@ import os
 import sys
 
 from . import constants
-from .cli import _execute_prompt, _print_stats, build_parser, get_content
-from .config import _ensure_config, _load_config, _resolve_default_model, _save_config
-from .constants import CODE_SYSTEM_PROMPT
+from .agent import run_agent_loop
+from .cli import _print_stats, build_parser, get_content
+from .config import _ensure_config, _load_config, _resolve_default_model, _save_config, _seed_defaults
 from .context import _machine_context
 from .db import _record_message, _record_usage, _resolve_session
 from .execute import confirm_and_run
@@ -12,11 +12,28 @@ from .http_client import call_llm_capture, call_llm_streaming
 from .models import (
     _check_modality_support,
     _fetch_models,
+    _fetch_rankings,
     _list_models_by_modality,
     _load_models,
     _maybe_update_models_bg,
     _resolve_model_name,
 )
+
+# Fallbacks used when a mode's config key is missing/blank — see _mode_prompt.
+_MODE_PROMPT_DEFAULTS = {
+    "chat": constants.DEFAULT_CHAT_SYSTEM_PROMPT,
+    "execute": constants.DEFAULT_EXECUTE_SYSTEM_PROMPT,
+    "code": constants.CODE_SYSTEM_PROMPT,
+    "agent": constants.DEFAULT_AGENT_SYSTEM_PROMPT,
+}
+
+
+def _mode_prompt(cfg: dict, mode: str) -> str:
+    template = cfg.get(f"{mode}_system_prompt") or _MODE_PROMPT_DEFAULTS[mode]
+    if "{shell}" in template:
+        shell = os.path.basename(os.environ.get("SHELL", "/bin/bash"))
+        template = template.replace("{shell}", shell)
+    return template
 
 
 def _color_enabled() -> bool:
@@ -155,6 +172,7 @@ def main() -> None:
 
     _maybe_update_models_bg()  # fire-and-forget, no impact on startup time
     _ensure_config()  # creates ~/.config/quipcli/config.json on first run
+    _seed_defaults({f"{mode}_system_prompt": text for mode, text in _MODE_PROMPT_DEFAULTS.items()})
 
     args = parser.parse_args()
 
@@ -188,6 +206,11 @@ def main() -> None:
     if args.update_models:
         models = _fetch_models()
         print(f"Cached {len(models)} models → {constants._MODELS_CACHE}" if models else "No models returned.")
+        return
+
+    if args.update_rankings:
+        ranked = _fetch_rankings()
+        print(f"Cached usage ranking for {len(ranked)} models → {constants._RANKINGS_CACHE}" if ranked else "No ranking data returned.")
         return
 
     if args.models:
@@ -239,9 +262,9 @@ def main() -> None:
 
     show_stats = not args.quiet and sys.stdout.isatty()
 
-    def _default_system(mode_specific: str | None) -> str | None:
+    def _default_system(mode: str) -> str | None:
         cfg = _load_config()
-        parts = [p for p in (mode_specific, _machine_context(), cfg.get("system_prompt")) if p]
+        parts = [p for p in (_mode_prompt(cfg, mode), _machine_context(), cfg.get("system_prompt")) if p]
         return "\n\n".join(parts) if parts else None
 
     def _build_messages(system: str | None) -> list[dict]:
@@ -262,12 +285,21 @@ def main() -> None:
             _record_message(session_id, "assistant", response_text,   args.model,  stats, mode)
 
     if args.execute:
-        msgs = _build_messages(args.system or _default_system(_execute_prompt()))
+        msgs = _build_messages(args.system or _default_system("execute"))
         cmd, stats = call_llm_capture(msgs, args.model)
         _post(cmd, stats, "execute")
         confirm_and_run(cmd, prompt_text)
+    elif args.agent:
+        msgs = _build_messages(args.system or _default_system("agent"))
+        text, stats = run_agent_loop(
+            msgs,
+            args.model,
+            max_steps=args.max_steps,
+            server_tools=not args.no_web,
+        )
+        _post(text, stats, "agent")
     elif args.code:
-        msgs = _build_messages(args.system or _default_system(CODE_SYSTEM_PROMPT))
+        msgs = _build_messages(args.system or _default_system("code"))
         text, stats = call_llm_streaming(
             msgs,
             args.model,
@@ -276,7 +308,7 @@ def main() -> None:
         )
         _post(text, stats, "code")
     else:
-        msgs = _build_messages(args.system or _default_system(None))
+        msgs = _build_messages(args.system or _default_system("chat"))
         text, stats = call_llm_streaming(
             msgs,
             args.model,

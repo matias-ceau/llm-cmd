@@ -1,19 +1,80 @@
+import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 
 from . import constants
 from .config import _load_config, _resolve_default_model, _save_config
 from .execute import _edit_text_value
 from .http_client import _ollama_models
-from .models import _load_models, _load_models_full
+from .models import _load_models, _load_models_full, _ranking_for
 
-_CONFIG_KEYS = ["default_model", "system_prompt", "ollama_model"]
+_CONFIG_KEYS = [
+    "default_model",
+    "chat_system_prompt",
+    "execute_system_prompt",
+    "code_system_prompt",
+    "agent_system_prompt",
+    "system_prompt",
+    "ollama_model",
+]
+_PROMPT_KEYS = {
+    "chat_system_prompt", "execute_system_prompt", "code_system_prompt",
+    "agent_system_prompt", "system_prompt",
+}
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+# Structural chrome shared by every fzf screen: bordered box, header pinned
+# above the list, compact inline counter, a preview pane on the right.
+# These are layout decisions (fzf 0.4x+ features), independent of color.
+_FZF_LAYOUT = [
+    "--height=90%",
+    "--layout=reverse",
+    "--border=rounded",
+    "--header-first",
+    "--info=inline-right",
+    "--marker=● ",
+    "--pointer=▶",
+    "--preview-window=right,55%,border-left",
+    "--bind=ctrl-/:toggle-preview",
+    "--bind=resize:refresh-preview",
+]
+
+# TODO(you): these are fzf's *semantic* color slots, not a single "make it
+# pretty" knob — each one lights up a different UI element:
+#   fg/bg      base list text / background
+#   fg+/bg+    the currently-highlighted row
+#   hl/hl+     the substring fzf bolds while you type a query (idle / on
+#              the highlighted row)
+#   pointer    the ▶ cursor glyph on the active row
+#   marker     multi-select marks (unused here, single-select only)
+#   border/label  the box outline + the " qp · ... " title text
+#   header     the dim keybind-hint line pinned under the border
+# Your fzf-file-manager.sh wires this same slot list to $FLEXOKI_* via
+# get_color()/pastel — quipcli can't assume your dotfiles are on the
+# machine it runs on, so the values are inlined here instead. Swap them
+# for whatever palette you actually want (Flexoki, terminal-native `-1`
+# to just inherit your terminal theme, or anything else) — this block is
+# the one place that controls it.
+_FZF_COLORS = [
+    "--color=fg:#878580,fg+:#fffcf0,bg+:#282726",
+    "--color=hl:#205ea6,hl+:#24837b",
+    "--color=info:#ad8301,prompt:#205ea6,pointer:#5e409d",
+    "--color=marker:#a02f6f,spinner:#ad8301,header:#6f6e69",
+    "--color=border:#575653,label:#cecdc3",
+]
 
 
 def _fzf_available() -> bool:
     return shutil.which("fzf") is not None
+
+
+def _strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
 
 
 def _run_fzf(
@@ -23,16 +84,22 @@ def _run_fzf(
     preview_cmd: str | None = None,
     extra_binds: list[str] | None = None,
     prompt: str | None = None,
+    border_label: str | None = None,
+    ansi: bool = False,
 ) -> str | None:
     """Shell out to the real fzf binary. Returns the selected line, or None
     on Esc/Ctrl-C/empty selection."""
-    args = ["fzf"]
+    args = ["fzf", *_FZF_LAYOUT, *_FZF_COLORS]
+    if ansi:
+        args.append("--ansi")
+    if border_label:
+        args += ["--border-label", f" {border_label} "]
     if header:
         args += ["--header", header]
     if prompt:
         args += ["--prompt", prompt]
     if preview_cmd:
-        args += ["--preview", preview_cmd, "--preview-window", "right,60%"]
+        args += ["--preview", preview_cmd]
     for bind in extra_binds or []:
         args += ["--bind", bind]
     try:
@@ -44,12 +111,19 @@ def _run_fzf(
 
 
 def _model_id_from_line(line: str) -> str:
-    return line[2:] if len(line) > 2 else line.strip()
+    line = _strip_ansi(line)
+    return line[2:].strip() if len(line) > 2 else line.strip()
 
 
 def _model_lines() -> list[str]:
     current = _resolve_default_model()
-    return [("* " if m == current else "  ") + m for m in _load_models()]
+    lines = []
+    for m in _load_models():
+        if m == current:
+            lines.append(f"\033[32m● {m}\033[0m")
+        else:
+            lines.append(f"  {m}")
+    return lines
 
 
 def _print_model_info(line: str) -> None:
@@ -74,6 +148,23 @@ def _print_model_info(line: str) -> None:
         print(f"price_per_1M_completion: {_per_million('completion')}")
         print(f"input_modalities: {', '.join(arch.get('input_modalities', []))}")
         print(f"output_modalities: {', '.join(arch.get('output_modalities', []))}")
+
+        ranking = _ranking_for(m.get("canonical_slug", ""))
+        if ranking:
+            print(
+                f"usage_rank: #{ranking['rank']} of top 50 on openrouter.ai/rankings "
+                f"({ranking['total_tokens']:,} tokens/day — usage volume, not a quality score)"
+            )
+
+        description = (m.get("description") or "").strip()
+        if description:
+            width = 70
+            try:
+                width = max(20, int(os.environ.get("FZF_PREVIEW_COLUMNS", width)))
+            except ValueError:
+                pass
+            print()
+            print(textwrap.fill(description, width=width))
         return
     print(f"id: {model_id}")
     print("(no cached details — run: qp --update-models)")
@@ -87,10 +178,12 @@ def _models_view(picker_mode: bool = False) -> str | None:
     action = "pick" if picker_mode else "set as default"
     selected = _run_fzf(
         lines,
-        header=f"Models — Enter: {action}  ctrl-r: refresh from provider  Esc: back",
+        header=f"enter  {action}   ctrl-r  refresh from provider   esc  back",
         preview_cmd="qp --_tui-model-info {}",
         extra_binds=["ctrl-r:reload(qp --update-models 1>&2; qp --_tui-list-models)"],
         prompt="model> ",
+        border_label="qp · models",
+        ansi=True,
     )
     if selected is None:
         return None
@@ -110,16 +203,17 @@ def pick_model_interactive() -> str | None:
 
 
 def _config_lines(cfg: dict) -> list[str]:
+    width = max(len(key) for key in _CONFIG_KEYS)
     lines = []
     for key in _CONFIG_KEYS:
         val = cfg.get(key) or "(not set)"
         val = val if len(val) <= 60 else val[:57] + "..."
-        lines.append(f"{key} = {val}")
+        lines.append(f"{key.ljust(width)} = {val}")
     return lines
 
 
 def _key_from_line(line: str) -> str:
-    return line.split(" = ", 1)[0]
+    return line.split(" = ", 1)[0].strip()
 
 
 def _config_view() -> None:
@@ -131,10 +225,11 @@ def _config_view() -> None:
     while True:
         selected = _run_fzf(
             _config_lines(_load_config()),
-            header="Config — Enter: edit  ctrl-e: open full file in $EDITOR  Esc: back",
+            header="enter  edit   ctrl-e  open full file in $EDITOR   esc  back",
             preview_cmd=preview,
             extra_binds=["ctrl-e:execute(qp --config-edit)+reload(qp --_tui-config-lines)"],
             prompt="config> ",
+            border_label="qp · config",
         )
         if selected is None:
             return
@@ -150,7 +245,12 @@ def _config_view() -> None:
             if models:
                 current = cfg.get("ollama_model") or ""
                 lines = [("* " if m == current else "  ") + m for m in models]
-                picked_line = _run_fzf(lines, header="Ollama models — Enter: pick  Esc: back", prompt="ollama> ")
+                picked_line = _run_fzf(
+                    lines,
+                    header="enter  pick   esc  back",
+                    prompt="ollama> ",
+                    border_label="qp · ollama models",
+                )
                 if picked_line is not None:
                     cfg["ollama_model"] = _model_id_from_line(picked_line)
                     _save_config(cfg)
@@ -158,8 +258,8 @@ def _config_view() -> None:
                 print("\033[2mOllama unreachable — enter a value manually.\033[0m", file=sys.stderr)
                 cfg["ollama_model"] = _edit_text_value(cfg.get("ollama_model") or "")
                 _save_config(cfg)
-        elif key == "system_prompt":
-            cfg["system_prompt"] = _edit_text_value(cfg.get("system_prompt") or "")
+        elif key in _PROMPT_KEYS:
+            cfg[key] = _edit_text_value(cfg.get(key) or "")
             _save_config(cfg)
 
 
@@ -168,7 +268,12 @@ def run_tui() -> None:
         print("Error: --tui requires fzf (https://github.com/junegunn/fzf).", file=sys.stderr)
         sys.exit(1)
     while True:
-        choice = _run_fzf(["Models", "Config"], header="quip — interactive config  Esc: quit", prompt="quip> ")
+        choice = _run_fzf(
+            ["Models", "Config"],
+            header="enter  open   esc  quit",
+            prompt="quip> ",
+            border_label="qp",
+        )
         if choice is None:
             return
         if choice == "Models":

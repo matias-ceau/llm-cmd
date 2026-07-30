@@ -6,6 +6,7 @@ Minimal CLI for LLMs. Ask questions or run AI-generated shell commands — **no 
 qp what is the meaning of anagnorisis
 qp -e update all my cargo binaries
 qp -c write a python function that flattens a nested list
+qp -a summarize what changed in this repo today and note it in CHANGES.md
 ```
 
 Everything lives behind a single binary, `qp` — no separate subcommand executables.
@@ -33,7 +34,7 @@ Then `qp -m <Tab>` completes model names. Substring match: typing `haiku` finds 
 ## Usage
 
 ```
-qp [-e] [-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
+qp [-e] [-c] [-a] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
 ```
 
 | Flag | Description |
@@ -41,6 +42,9 @@ qp [-e] [-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
 | *(none)* | Ask a question, stream the answer |
 | `-e` | Generate a shell command, confirm `[Y/n/e]`, run it |
 | `-c` | Generate code, print to stdout |
+| `-a` | Agent mode: multi-turn tool-calling loop — see below |
+| `--max-steps N` | With `-a`: max tool-calling loop iterations (default: 12) |
+| `--no-web` | With `-a`: disable the hosted web search/fetch tools for this call |
 | `-m MODEL` | Override model (default: `openai/gpt-4o-mini`). MODEL may be a substring matching a single cached model, e.g. `-m haiku` |
 | `-S PROMPT` | Override system prompt |
 | `-s SESSION` / `-f` | Named session, or follow up on the last one |
@@ -52,6 +56,7 @@ qp [-e] [-c] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
 | `--cost [PERIOD]` | Usage cost summary (`1d`/`7d`/`30d`/`all`) |
 | `--tui` | Interactive fzf-based picker for models and config — see below |
 | `--update-models` | Force-refresh model cache |
+| `--update-rankings` | Cache OpenRouter's top-50 daily usage ranking (needs an OpenRouter key; usage volume, not a quality score — shown in `--tui`'s model preview once cached) |
 | `--version` | Print version |
 
 Chat responses render lightweight ANSI markdown styling on TTYs (headings, code spans/blocks, bold, list items, blockquotes) while still streaming token-by-token. Disable colors with `NO_COLOR=1`.
@@ -63,6 +68,31 @@ cat error.log | qp            # stdin as the whole prompt
 git diff | qp summarize this  # words + piped context
 git diff | qp -e write a conventional commit command
 ```
+
+## Agent mode (`-a`)
+
+```bash
+qp -a find the largest log file under /var/log and tell me what's in it
+qp -a --max-steps 5 --no-web refactor the imports in quipcli/cli.py
+```
+
+Runs a multi-turn tool-calling loop instead of a single one-shot reply, so it can go beyond oneliners: read files, run shell commands, write files, and (unless `--no-web`) search/fetch the web via OpenRouter's hosted `openrouter:web_search`/`openrouter:web_fetch` server tools — those two run entirely on OpenRouter's side, so there's nothing extra to configure or pay for beyond your normal API usage.
+
+`run_shell` and `write_file` always prompt `[Y/n]` before doing anything — same confirm-first posture as `-e`. Declining just tells the model to try another approach; it doesn't abort the run. `read_file` runs without confirmation. The loop stops after `--max-steps` iterations (default 12) if the model doesn't converge on a final answer.
+
+The prompt for this mode lives in `agent_system_prompt` in `config.json`, seeded like the other per-mode prompts — edit it with `qp --config-edit` or `qp --tui`.
+
+## Model routing (no code needed)
+
+`-m/--model` passes whatever string you give it straight to the API, so OpenRouter's own routing features and model-variant suffixes already work without any `qp`-specific flag:
+
+```bash
+qp -m openrouter/auto-beta what's the fastest way to sort a linked list  # Auto Router: picks a model per-prompt
+qp -m openrouter/pareto-code -c write a merge sort in rust               # Pareto Router: best coder for the price
+qp -m "anthropic/claude-3-5-haiku:thinking" solve this step by step      # :thinking / :nitro / :extended / :free variants
+```
+
+See OpenRouter's [Auto Router](https://openrouter.ai/docs/guides/routing/routers/auto-router) and [Pareto Router](https://openrouter.ai/docs/guides/routing/routers/pareto-router) docs for details. `qp --model-set openrouter/auto-beta` persists one of these as your default the same way as any other model name.
 
 ### Offline / Ollama fallback
 
@@ -76,8 +106,8 @@ qp --tui
 
 Shells out to the real `fzf` (and `bat`, for preview syntax highlighting) — no reimplemented fuzzy-finder, and it inherits your existing `FZF_DEFAULT_OPTS` if you have one.
 
-- **Models** — fuzzy list of cached models, current default marked `*`. The preview pane shows name, context length, price per 1M tokens (prompt/completion), and input/output modalities. `Enter` sets the highlighted model as the new default; `ctrl-r` refreshes the cache from the provider without leaving the picker.
-- **Config** — fuzzy list of editable keys (`default_model`, `system_prompt`, `ollama_model`), with the live `config.json` shown via `bat` on the right. `Enter` on `default_model` drills into the Models list; on `ollama_model`, into a list of locally available Ollama models (falls back to free-text entry if Ollama is unreachable); on `system_prompt`, opens `$EDITOR` on just that value. `ctrl-e` opens the whole config file in `$EDITOR` at any time.
+- **Models** — fuzzy list of cached models, current default marked `*`. The preview pane shows name, context length, price per 1M tokens (prompt/completion), input/output modalities, usage rank (once `qp --update-rankings` has been run), and the model's description from the provider. `Enter` sets the highlighted model as the new default; `ctrl-r` refreshes the cache from the provider without leaving the picker.
+- **Config** — fuzzy list of editable keys (`default_model`, `chat_system_prompt`, `execute_system_prompt`, `code_system_prompt`, `agent_system_prompt`, `system_prompt`, `ollama_model`), with the live `config.json` shown via `bat` on the right. `Enter` on `default_model` drills into the Models list; on `ollama_model`, into a list of locally available Ollama models (falls back to free-text entry if Ollama is unreachable); on any `*_system_prompt` key, opens `$EDITOR` on just that value. `ctrl-e` opens the whole config file in `$EDITOR` at any time.
 
 `Esc` steps back one level; `Esc` at the top menu exits. Requires `fzf` to be installed — `qp --model-set` (no value) also uses this picker when `fzf` is available, falling back to a plain numbered prompt otherwise.
 
@@ -106,9 +136,9 @@ Environment variables always take priority over the config file:
 
 Every request (unless `-S` fully overrides the system prompt) automatically gets:
 
-1. mode-specific instructions (execute/code mode)
+1. the **per-mode prompt** for whichever mode is active — `chat_system_prompt`, `execute_system_prompt`, `code_system_prompt`, or `agent_system_prompt` in `config.json`. These are seeded with sensible defaults the first time `qp` runs (or on upgrade, for any key missing from an existing config), so they're plain editable JSON from the start, not buried in the Python source. `execute_system_prompt` may contain the literal placeholder `{shell}`, substituted with the invoking machine's actual `$SHELL` at request time — never baked in as a fixed name, so a `config.json` synced across machines with different shells stays correct. Editing these only changes wording/tone: the hard constraint they describe (no markdown fences in `-e` output) is also enforced in code, independent of what the prompt says.
 2. **machine context** — OS/distro, `$SHELL`, architecture — detected fresh on every call, so the same `config.json` is correct whether it's synced to an Arch box or a Mac. No more reminding the model what OS you're on.
-3. a free-text `"system_prompt"` from `config.json`, if you set one — standing instructions/preferences applied to every call:
+3. a free-text `"system_prompt"` from `config.json`, if you set one — standing instructions/preferences applied to every call regardless of mode:
 
 ```bash
 qp --config-edit

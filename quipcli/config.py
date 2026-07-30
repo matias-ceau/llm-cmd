@@ -31,6 +31,19 @@ def _ensure_config() -> dict:
     return cfg
 
 
+def _seed_defaults(defaults: dict) -> dict:
+    """Write any of `defaults` not already present in config.json — used to
+    materialize the per-mode system prompt defaults as plain, editable JSON
+    instead of leaving them buried in Python source. Never overwrites an
+    existing key, so a user's edits (or a deliberately blank value) stick."""
+    cfg = _load_config()
+    missing = {k: v for k, v in defaults.items() if k not in cfg}
+    if missing:
+        cfg.update(missing)
+        _save_config(cfg)
+    return cfg
+
+
 def _resolve_default_model() -> str:
     return (
         os.environ.get("LLM_CMD_MODEL")
