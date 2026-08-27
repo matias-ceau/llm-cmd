@@ -2181,6 +2181,43 @@ class TestMainArgvGuards:
             quipcli.main()
         assert "No history" in capsys.readouterr().out
 
+    @pytest.mark.parametrize(
+        "argv", [["qp", "--in", "image", "hi"], ["qp", "--out", "audio", "hi"]]
+    )
+    def test_in_out_filters_require_models_flag(
+        self, argv, tmp_path, monkeypatch, capsys
+    ):
+        self._isolate_config(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", argv)
+        with patch("subprocess.Popen"), pytest.raises(SystemExit) as exc:
+            quipcli.main()
+        assert exc.value.code == 1
+        assert "--models" in capsys.readouterr().err
+
+    def test_models_with_in_filter_is_unaffected(self, tmp_path, monkeypatch, capsys):
+        self._isolate_config(tmp_path, monkeypatch)
+        cache = tmp_path / "models.json"
+        cache.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "id": "m",
+                            "architecture": {
+                                "input_modalities": ["text", "image"],
+                                "output_modalities": ["text"],
+                            },
+                        }
+                    ]
+                }
+            )
+        )
+        monkeypatch.setattr(quipcli.constants, "_MODELS_CACHE", cache)
+        monkeypatch.setattr(sys, "argv", ["qp", "--models", "--in", "image"])
+        with patch("subprocess.Popen"):
+            quipcli.main()
+        assert "m" in capsys.readouterr().out
+
 
 # ── tui ───────────────────────────────────────────────────────────────────────
 

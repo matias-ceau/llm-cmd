@@ -209,6 +209,12 @@ def main() -> None:
             )
             sys.exit(1)
 
+    # --in/--out only mean anything alongside --models; without it they parse
+    # fine but silently do nothing.
+    if (args.in_filter or args.out_filter) and not args.models:
+        print("Error: --in/--out require --models.", file=sys.stderr)
+        sys.exit(1)
+
     # Hidden flags used internally by --tui's fzf preview/reload — must stay
     # fast (cache-only, no network) since fzf calls them on every keystroke.
     if args.tui_model_info is not None:
