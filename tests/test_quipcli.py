@@ -147,6 +147,13 @@ class TestParser:
         args = build_parser().parse_args(["-a", "--max-steps", "5", "do it"])
         assert args.max_steps == 5
 
+    @pytest.mark.parametrize("bad", ["0", "-1", "-5"])
+    def test_max_steps_rejects_non_positive(self, bad, capsys):
+        with pytest.raises(SystemExit) as exc:
+            build_parser().parse_args(["-a", "--max-steps", bad, "do it"])
+        assert exc.value.code == 2
+        assert "must be >= 1" in capsys.readouterr().err
+
     def test_no_web_default_false(self):
         assert build_parser().parse_args(["hi"]).no_web is False
 

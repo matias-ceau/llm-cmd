@@ -15,6 +15,13 @@ def _execute_prompt() -> str:
     return DEFAULT_EXECUTE_SYSTEM_PROMPT.replace("{shell}", shell)
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
+    return value
+
+
 def _package_version() -> str:
     from importlib.metadata import PackageNotFoundError, version
 
@@ -56,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-steps",
-        type=int,
+        type=_positive_int,
         default=12,
         metavar="N",
         help="With -a/--agent: max tool-calling loop iterations (default: 12).",
