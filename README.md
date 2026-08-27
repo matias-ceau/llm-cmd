@@ -122,7 +122,7 @@ qp --config-edit          # open config.json in $EDITOR
 qp --tui                  # or browse/edit everything interactively
 ```
 
-Environment variables always take priority over the config file:
+Most of these have no config.json equivalent at all (API key, API URL, Ollama URL are env-only). The one exception is the model: where both `LLM_CMD_MODEL` and `config.json`'s `default_model` are set, the environment variable wins.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
