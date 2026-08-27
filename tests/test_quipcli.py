@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -24,6 +25,7 @@ from quipcli import (
 )
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 class MockHTTPResponse:
     """Minimal http.client.HTTPResponse stand-in."""
@@ -54,15 +56,20 @@ def _mock_conn(resp: MockHTTPResponse) -> MagicMock:
 @pytest.fixture
 def mock_http():
     """Patches HTTPSConnection + API key. Yields a factory: resp -> http_cls mock."""
-    with patch("http.client.HTTPSConnection") as http_cls, \
-         patch("quipcli.constants._API_KEY", "key"):
+    with (
+        patch("http.client.HTTPSConnection") as http_cls,
+        patch("quipcli.constants._API_KEY", "key"),
+    ):
+
         def setup(resp: MockHTTPResponse) -> MagicMock:
             http_cls.return_value = _mock_conn(resp)
             return http_cls
+
         yield setup
 
 
 # ── _strip_fences ─────────────────────────────────────────────────────────────
+
 
 class TestStripFences:
     def test_plain_command_unchanged(self):
@@ -88,6 +95,7 @@ class TestStripFences:
 
 
 # ── build_parser / get_content ────────────────────────────────────────────────
+
 
 class TestParser:
     def test_words_joined(self):
@@ -276,6 +284,7 @@ class TestGetContent:
 
 # ── _execute_prompt ───────────────────────────────────────────────────────────
 
+
 class TestExecutePrompt:
     def test_includes_shell_name(self, monkeypatch):
         monkeypatch.setenv("SHELL", "/bin/zsh")
@@ -294,6 +303,7 @@ class TestExecutePrompt:
 
 # ── _mode_prompt ──────────────────────────────────────────────────────────────
 
+
 class TestModePrompt:
     def test_falls_back_to_default_for_chat(self):
         assert quipcli._mode_prompt({}, "chat") == quipcli.DEFAULT_CHAT_SYSTEM_PROMPT
@@ -306,6 +316,7 @@ class TestModePrompt:
 
     def test_mode_prompt_defaults_includes_all_four_modes(self):
         from quipcli.entry import _MODE_PROMPT_DEFAULTS
+
         assert set(_MODE_PROMPT_DEFAULTS) == {"chat", "execute", "code", "agent"}
 
     def test_uses_config_override(self):
@@ -322,7 +333,9 @@ class TestModePrompt:
         assert "fish" in result
         assert "{shell}" not in result
 
-    def test_custom_execute_prompt_shell_placeholder_also_substituted(self, monkeypatch):
+    def test_custom_execute_prompt_shell_placeholder_also_substituted(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("SHELL", "/bin/zsh")
         cfg = {"execute_system_prompt": "Shell is {shell}, be terse."}
         assert quipcli._mode_prompt(cfg, "execute") == "Shell is zsh, be terse."
@@ -330,27 +343,32 @@ class TestModePrompt:
 
 # ── _models_url ───────────────────────────────────────────────────────────────
 
+
 class TestModelsUrl:
-    @pytest.mark.parametrize("api_url,expected", [
-        (
-            "https://openrouter.ai/api/v1/chat/completions",
-            "https://openrouter.ai/api/v1/models",
-        ),
-        (
-            "https://api.openai.com/v1/chat/completions",
-            "https://api.openai.com/v1/models",
-        ),
-        (
-            "https://api.groq.com/openai/v1/chat/completions",
-            "https://api.groq.com/openai/v1/models",
-        ),
-    ])
+    @pytest.mark.parametrize(
+        "api_url,expected",
+        [
+            (
+                "https://openrouter.ai/api/v1/chat/completions",
+                "https://openrouter.ai/api/v1/models",
+            ),
+            (
+                "https://api.openai.com/v1/chat/completions",
+                "https://api.openai.com/v1/models",
+            ),
+            (
+                "https://api.groq.com/openai/v1/chat/completions",
+                "https://api.groq.com/openai/v1/models",
+            ),
+        ],
+    )
     def test_derives_models_url(self, api_url, expected):
         with patch("quipcli.constants._API_URL", api_url):
             assert _models_url() == expected
 
 
 # ── _load_models ──────────────────────────────────────────────────────────────
+
 
 class TestLoadModels:
     def test_missing_cache_returns_empty(self, tmp_path):
@@ -359,10 +377,16 @@ class TestLoadModels:
 
     def test_valid_cache_sorted(self, tmp_path):
         cache = tmp_path / "models.json"
-        cache.write_text(json.dumps({"data": [
-            {"id": "openai/gpt-4o"},
-            {"id": "anthropic/claude-3-5-haiku"},
-        ]}))
+        cache.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {"id": "openai/gpt-4o"},
+                        {"id": "anthropic/claude-3-5-haiku"},
+                    ]
+                }
+            )
+        )
         with patch("quipcli.constants._MODELS_CACHE", cache):
             assert _load_models() == ["anthropic/claude-3-5-haiku", "openai/gpt-4o"]
 
@@ -382,6 +406,7 @@ class TestLoadModels:
 
 
 # ── _resolve_model_name ───────────────────────────────────────────────────────
+
 
 class TestResolveModelName:
     def _cache(self, tmp_path, ids):
@@ -409,10 +434,18 @@ class TestResolveModelName:
             assert _resolve_model_name("mistral/mixtral") == "mistral/mixtral"
 
     def test_ambiguous_match_exits(self, tmp_path, capsys):
-        cache = self._cache(tmp_path, [
-            "anthropic/claude-3-5-haiku", "anthropic/claude-3-opus", "openai/gpt-4o",
-        ])
-        with patch("quipcli.constants._MODELS_CACHE", cache), pytest.raises(SystemExit) as exc:
+        cache = self._cache(
+            tmp_path,
+            [
+                "anthropic/claude-3-5-haiku",
+                "anthropic/claude-3-opus",
+                "openai/gpt-4o",
+            ],
+        )
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            pytest.raises(SystemExit) as exc,
+        ):
             _resolve_model_name("claude")
         assert exc.value.code == 1
         err = capsys.readouterr().err
@@ -426,6 +459,7 @@ class TestResolveModelName:
 
 
 # ── _maybe_update_models_bg ───────────────────────────────────────────────────
+
 
 class TestMaybeUpdateModelsBg:
     def test_skips_when_bg_env_set(self, monkeypatch, tmp_path):
@@ -442,7 +476,10 @@ class TestMaybeUpdateModelsBg:
         cache = tmp_path / "models.json"
         cache.write_text("{}")
         os.utime(cache, (time.time(), time.time()))
-        with patch("subprocess.Popen") as popen, patch("quipcli.constants._MODELS_CACHE", cache):
+        with (
+            patch("subprocess.Popen") as popen,
+            patch("quipcli.constants._MODELS_CACHE", cache),
+        ):
             _maybe_update_models_bg()
         popen.assert_not_called()
 
@@ -461,7 +498,10 @@ class TestMaybeUpdateModelsBg:
         cache.write_text("{}")
         old = time.time() - (quipcli._CACHE_TTL + 1)
         os.utime(cache, (old, old))
-        with patch("subprocess.Popen") as popen, patch("quipcli.constants._MODELS_CACHE", cache):
+        with (
+            patch("subprocess.Popen") as popen,
+            patch("quipcli.constants._MODELS_CACHE", cache),
+        ):
             _maybe_update_models_bg()
         popen.assert_called_once()
 
@@ -481,34 +521,68 @@ class TestMaybeUpdateModelsBg:
 
 # ── _fetch_rankings / _load_rankings / _ranking_for ─────────────────────────────
 
+
 class TestFetchRankings:
     def test_success_caches_latest_day_sorted_desc(self, tmp_path, mock_http):
-        body = json.dumps({"data": [
-            {"date": "2026-07-22", "model_permaslug": "openai/gpt-4o", "total_tokens": "999"},
-            {"date": "2026-07-23", "model_permaslug": "other", "total_tokens": "500"},
-            {"date": "2026-07-23", "model_permaslug": "anthropic/claude-3-5-sonnet", "total_tokens": "200"},
-            {"date": "2026-07-23", "model_permaslug": "openai/gpt-4o", "total_tokens": "800"},
-        ]}).encode()
+        body = json.dumps(
+            {
+                "data": [
+                    {
+                        "date": "2026-07-22",
+                        "model_permaslug": "openai/gpt-4o",
+                        "total_tokens": "999",
+                    },
+                    {
+                        "date": "2026-07-23",
+                        "model_permaslug": "other",
+                        "total_tokens": "500",
+                    },
+                    {
+                        "date": "2026-07-23",
+                        "model_permaslug": "anthropic/claude-3-5-sonnet",
+                        "total_tokens": "200",
+                    },
+                    {
+                        "date": "2026-07-23",
+                        "model_permaslug": "openai/gpt-4o",
+                        "total_tokens": "800",
+                    },
+                ]
+            }
+        ).encode()
         mock_http(MockHTTPResponse(200, body))
         cache = tmp_path / "rankings.json"
-        with patch("quipcli.constants._RANKINGS_CACHE", cache), \
-             patch("quipcli.constants._CACHE_DIR", tmp_path), \
-             patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL):
+        with (
+            patch("quipcli.constants._RANKINGS_CACHE", cache),
+            patch("quipcli.constants._CACHE_DIR", tmp_path),
+            patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL),
+        ):
             ranked = quipcli._fetch_rankings()
         assert ranked == [
             {"rank": 1, "model_permaslug": "openai/gpt-4o", "total_tokens": 800},
-            {"rank": 2, "model_permaslug": "anthropic/claude-3-5-sonnet", "total_tokens": 200},
+            {
+                "rank": 2,
+                "model_permaslug": "anthropic/claude-3-5-sonnet",
+                "total_tokens": 200,
+            },
         ]
         assert json.loads(cache.read_text())["date"] == "2026-07-23"
 
     def test_skips_non_openrouter_provider(self):
-        with patch("quipcli.constants._API_URL", "https://api.groq.com/openai/v1/chat/completions"), \
-             patch("quipcli.constants._API_KEY", "key"):
+        with (
+            patch(
+                "quipcli.constants._API_URL",
+                "https://api.groq.com/openai/v1/chat/completions",
+            ),
+            patch("quipcli.constants._API_KEY", "key"),
+        ):
             assert quipcli._fetch_rankings() == []
 
     def test_skips_without_api_key(self):
-        with patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL), \
-             patch("quipcli.constants._API_KEY", ""):
+        with (
+            patch("quipcli.constants._API_URL", quipcli.constants._DEFAULT_API_URL),
+            patch("quipcli.constants._API_KEY", ""),
+        ):
             assert quipcli._fetch_rankings() == []
 
     def test_non_200_returns_empty(self, mock_http):
@@ -533,16 +607,30 @@ class TestRankingFor:
 
     def test_finds_matching_permaslug(self, tmp_path):
         cache = tmp_path / "rankings.json"
-        cache.write_text(json.dumps({"date": "2026-07-23", "data": [
-            {"rank": 1, "model_permaslug": "openai/gpt-4o", "total_tokens": 100},
-        ]}))
+        cache.write_text(
+            json.dumps(
+                {
+                    "date": "2026-07-23",
+                    "data": [
+                        {
+                            "rank": 1,
+                            "model_permaslug": "openai/gpt-4o",
+                            "total_tokens": 100,
+                        },
+                    ],
+                }
+            )
+        )
         with patch("quipcli.constants._RANKINGS_CACHE", cache):
             assert quipcli._ranking_for("openai/gpt-4o") == {
-                "rank": 1, "model_permaslug": "openai/gpt-4o", "total_tokens": 100,
+                "rank": 1,
+                "model_permaslug": "openai/gpt-4o",
+                "total_tokens": 100,
             }
 
 
 # ── HTTP layer ────────────────────────────────────────────────────────────────
+
 
 class TestMakeRequest:
     def _msgs(self, prompt="p", system=None):
@@ -568,7 +656,10 @@ class TestMakeRequest:
             patch("quipcli.http_client._ollama_models", return_value=None),
         ):
             cls.return_value.request.side_effect = OSError("connection refused")
-            with patch("quipcli.constants._API_KEY", "key"), pytest.raises(SystemExit) as exc:
+            with (
+                patch("quipcli.constants._API_KEY", "key"),
+                pytest.raises(SystemExit) as exc,
+            ):
                 quipcli._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
         assert sleep.call_count == 3  # all backoff waits exhausted
@@ -582,9 +673,11 @@ class TestMakeRequest:
     def test_retries_on_429_then_succeeds(self):
         limited = MockHTTPResponse(429, b"rate limited")
         ok = MockHTTPResponse(200, b"ok")
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.http_client.time.sleep") as sleep:
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.http_client.time.sleep") as sleep,
+        ):
             cls.side_effect = [_mock_conn(limited), _mock_conn(ok)]
             resp, used = quipcli._make_request(self._msgs(), "m", False)
         assert resp.status == 200
@@ -592,9 +685,11 @@ class TestMakeRequest:
         assert sleep.call_count == 1
 
     def test_no_retry_on_client_error(self, capsys):
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.http_client.time.sleep") as sleep:
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.http_client.time.sleep") as sleep,
+        ):
             cls.return_value = _mock_conn(MockHTTPResponse(404, b"not found"))
             with pytest.raises(SystemExit) as exc:
                 quipcli._make_request(self._msgs(), "m", False)
@@ -646,12 +741,17 @@ class TestOllamaFallback:
 
     def test_falls_back_when_provider_unreachable(self, capsys):
         ok = MockHTTPResponse(200, b"ok")
-        with patch("http.client.HTTPSConnection") as https_cls, \
-             patch("http.client.HTTPConnection") as http_cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.http_client.time.sleep"):
+        with (
+            patch("http.client.HTTPSConnection") as https_cls,
+            patch("http.client.HTTPConnection") as http_cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.http_client.time.sleep"),
+        ):
             https_cls.return_value.request.side_effect = OSError("no route")
-            http_cls.side_effect = [_mock_conn(self._tags_resp(["llama3.2"])), _mock_conn(ok)]
+            http_cls.side_effect = [
+                _mock_conn(self._tags_resp(["llama3.2"])),
+                _mock_conn(ok),
+            ]
             resp, used = quipcli._make_request(self._msgs(), "openai/gpt-4o", False)
         assert resp.status == 200
         assert used == "llama3.2"
@@ -659,23 +759,31 @@ class TestOllamaFallback:
 
     def test_no_api_key_uses_ollama(self, capsys):
         ok = MockHTTPResponse(200, b"ok")
-        with patch("http.client.HTTPConnection") as http_cls, \
-             patch("quipcli.constants._API_KEY", ""), \
-             patch("quipcli.constants._CONFIG_FILE", Path("/nonexistent/config.json")):
-            http_cls.side_effect = [_mock_conn(self._tags_resp(["qwen3:8b"])), _mock_conn(ok)]
+        with (
+            patch("http.client.HTTPConnection") as http_cls,
+            patch("quipcli.constants._API_KEY", ""),
+            patch("quipcli.constants._CONFIG_FILE", Path("/nonexistent/config.json")),
+        ):
+            http_cls.side_effect = [
+                _mock_conn(self._tags_resp(["qwen3:8b"])),
+                _mock_conn(ok),
+            ]
             resp, used = quipcli._make_request(self._msgs(), "m", False)
         assert resp.status == 200
         assert used == "qwen3:8b"
 
     def test_config_ollama_model_preferred(self):
         from quipcli.http_client import _pick_ollama_model
+
         assert _pick_ollama_model(["a", "b"], {"ollama_model": "b"}) == "b"
         assert _pick_ollama_model(["a", "b"], {}) == "a"
 
     def test_no_fallback_on_api_status_error(self, capsys):
-        with patch("http.client.HTTPSConnection") as https_cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.http_client._ollama_models") as tags:
+        with (
+            patch("http.client.HTTPSConnection") as https_cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.http_client._ollama_models") as tags,
+        ):
             https_cls.return_value = _mock_conn(MockHTTPResponse(401, b"unauthorized"))
             with pytest.raises(SystemExit):
                 quipcli._make_request(self._msgs(), "m", False)
@@ -777,16 +885,9 @@ class TestCallLlmStreaming:
         assert "# Heading" in out
 
     def test_markdown_rendering_handles_embedded_fences(self, mock_http, capsys):
-        content = (
-            "````markdown\n"
-            "```python\n"
-            "print('x')\n"
-            "```\n"
-            "````\n"
-            "plain\n"
-        )
+        content = "````markdown\n```python\nprint('x')\n```\n````\nplain\n"
         lines = [
-            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n".encode(),
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
@@ -799,7 +900,7 @@ class TestCallLlmStreaming:
     def test_markdown_fence_not_colored_as_code(self, mock_http, capsys):
         content = "```md\n# title\n```\nplain\n"
         lines = [
-            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n".encode(),
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
@@ -809,9 +910,11 @@ class TestCallLlmStreaming:
         assert "\x1b[38;5;150m" not in out
 
     def test_markdown_rendering_styles_list_items(self, mock_http, capsys):
-        content = "- bullet one\n* bullet two\n+ bullet three\n1. numbered\n2) numbered\n"
+        content = (
+            "- bullet one\n* bullet two\n+ bullet three\n1. numbered\n2) numbered\n"
+        )
         lines = [
-            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n".encode(),
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
@@ -829,7 +932,7 @@ class TestCallLlmStreaming:
     def test_markdown_rendering_styles_blockquote(self, mock_http, capsys):
         content = "> quoted line\nplain line\n"
         lines = [
-            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n".encode(),
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
@@ -843,7 +946,7 @@ class TestCallLlmStreaming:
     def test_markdown_rendering_bold_not_confused_with_list(self, mock_http, capsys):
         content = "**bold** text\n"
         lines = [
-            f'data: {json.dumps({"choices": [{"delta": {"content": content}}]})}\n'.encode(),
+            f"data: {json.dumps({'choices': [{'delta': {'content': content}}]})}\n".encode(),
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
@@ -860,17 +963,21 @@ class TestCallLlmCapture:
         return [{"role": "user", "content": "p"}]
 
     def test_returns_stripped_content(self, mock_http):
-        body = json.dumps({"choices": [{"message": {"content": "  result  "}}]}).encode()
+        body = json.dumps(
+            {"choices": [{"message": {"content": "  result  "}}]}
+        ).encode()
         mock_http(MockHTTPResponse(200, body))
         text, stats = quipcli.call_llm_capture(self._msgs(), "m")
         assert text == "result"
         assert stats is None
 
     def test_returns_usage_stats(self, mock_http):
-        body = json.dumps({
-            "choices": [{"message": {"content": "hi"}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.0003},
-        }).encode()
+        body = json.dumps(
+            {
+                "choices": [{"message": {"content": "hi"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.0003},
+            }
+        ).encode()
         mock_http(MockHTTPResponse(200, body))
         text, stats = quipcli.call_llm_capture(self._msgs(), "m")
         assert text == "hi"
@@ -903,6 +1010,7 @@ class TestCallLlmCapture:
 
 # ── _make_request extra param ────────────────────────────────────────────────
 
+
 class TestMakeRequestExtra:
     def _msgs(self):
         return [{"role": "user", "content": "p"}]
@@ -926,6 +1034,7 @@ class TestMakeRequestExtra:
 
 # ── tools.py ──────────────────────────────────────────────────────────────────
 
+
 class TestToolsModule:
     def test_default_tools_includes_server_tools_by_default(self):
         tools = quipcli.default_tools()
@@ -942,7 +1051,9 @@ class TestToolsModule:
 
     def test_default_tools_includes_local_function_names(self):
         names = [
-            t["function"]["name"] for t in quipcli.default_tools() if t["type"] == "function"
+            t["function"]["name"]
+            for t in quipcli.default_tools()
+            if t["type"] == "function"
         ]
         assert set(names) == {"run_shell", "read_file", "write_file"}
 
@@ -950,7 +1061,9 @@ class TestToolsModule:
         assert "unknown tool" in quipcli.execute_tool_call("nope", "{}")
 
     def test_execute_tool_call_invalid_json(self):
-        assert "invalid arguments" in quipcli.execute_tool_call("read_file", "{not json")
+        assert "invalid arguments" in quipcli.execute_tool_call(
+            "read_file", "{not json"
+        )
 
     def test_execute_tool_call_dispatches_read_file(self, tmp_path):
         f = tmp_path / "note.txt"
@@ -998,12 +1111,20 @@ class TestToolsModule:
             with patch("builtins.input", return_value="y"):
                 result = quipcli.run_shell({"command": "echo hi"})
         run.assert_called_once_with(
-            "echo hi", shell=True, capture_output=True, text=True, timeout=120, check=False,
+            "echo hi",
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
         )
         assert result == "output"
 
     def test_run_shell_declined_does_not_run(self):
-        with patch("quipcli.tools.subprocess.run") as run, patch("builtins.input", return_value="n"):
+        with (
+            patch("quipcli.tools.subprocess.run") as run,
+            patch("builtins.input", return_value="n"),
+        ):
             result = quipcli.run_shell({"command": "rm -rf /"})
         run.assert_not_called()
         assert "declined" in result
@@ -1019,7 +1140,10 @@ class TestToolsModule:
 
     def test_run_shell_timeout(self):
         with (
-            patch("quipcli.tools.subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 120)),
+            patch(
+                "quipcli.tools.subprocess.run",
+                side_effect=subprocess.TimeoutExpired("cmd", 120),
+            ),
             patch("builtins.input", return_value="y"),
         ):
             result = quipcli.run_shell({"command": "sleep 999"})
@@ -1027,6 +1151,7 @@ class TestToolsModule:
 
 
 # ── agent.py ──────────────────────────────────────────────────────────────────
+
 
 class TestAgentLoop:
     def _msgs(self):
@@ -1043,10 +1168,14 @@ class TestAgentLoop:
             {"role": "assistant", "content": "here is the answer"},
             usage={"prompt_tokens": 5, "completion_tokens": 3},
         )
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.constants._API_KEY", "key"):
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+        ):
             cls.return_value = _mock_conn(resp)
-            text, stats = quipcli.run_agent_loop(self._msgs(), "m", render_markdown=False)
+            text, stats = quipcli.run_agent_loop(
+                self._msgs(), "m", render_markdown=False
+            )
         assert text == "here is the answer"
         assert "here is the answer" in capsys.readouterr().out
         assert stats is not None
@@ -1058,11 +1187,16 @@ class TestAgentLoop:
             {
                 "role": "assistant",
                 "content": None,
-                "tool_calls": [{
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {"name": "read_file", "arguments": json.dumps({"path": "/tmp/x"})},
-                }],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"path": "/tmp/x"}),
+                        },
+                    }
+                ],
             },
             usage={"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.001},
         )
@@ -1070,9 +1204,11 @@ class TestAgentLoop:
             {"role": "assistant", "content": "the file says hello"},
             usage={"prompt_tokens": 20, "completion_tokens": 8, "cost": 0.002},
         )
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.agent.execute_tool_call", return_value="hello") as exec_tool:
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.agent.execute_tool_call", return_value="hello") as exec_tool,
+        ):
             cls.side_effect = [_mock_conn(tool_call_resp), _mock_conn(final_resp)]
             messages = self._msgs()
             text, stats = quipcli.run_agent_loop(messages, "m", render_markdown=False)
@@ -1080,7 +1216,9 @@ class TestAgentLoop:
         assert text == "the file says hello"
         # tool result appended to the conversation before the final call
         tool_msgs = [m for m in messages if m.get("role") == "tool"]
-        assert tool_msgs == [{"role": "tool", "tool_call_id": "call_1", "content": "hello"}]
+        assert tool_msgs == [
+            {"role": "tool", "tool_call_id": "call_1", "content": "hello"}
+        ]
         # usage accumulated across both steps
         assert stats is not None
         assert stats.prompt_tokens == 30
@@ -1088,33 +1226,48 @@ class TestAgentLoop:
         assert stats.cost_usd == pytest.approx(0.003)
 
     def test_server_tool_calls_are_not_executed_locally(self, capsys):
-        resp = self._response({
-            "role": "assistant",
-            "content": "grounded answer",
-            "tool_calls": [{"id": "call_1", "type": "openrouter:web_search", "function": {}}],
-        })
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.agent.execute_tool_call") as exec_tool:
+        resp = self._response(
+            {
+                "role": "assistant",
+                "content": "grounded answer",
+                "tool_calls": [
+                    {"id": "call_1", "type": "openrouter:web_search", "function": {}}
+                ],
+            }
+        )
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.agent.execute_tool_call") as exec_tool,
+        ):
             cls.return_value = _mock_conn(resp)
             text, _ = quipcli.run_agent_loop(self._msgs(), "m", render_markdown=False)
         exec_tool.assert_not_called()
         assert text == "grounded answer"
 
     def test_max_steps_reached_returns_last_content(self, capsys):
-        looping_resp = self._response({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": "call_1", "type": "function",
-                "function": {"name": "run_shell", "arguments": "{}"},
-            }],
-        })
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.constants._API_KEY", "key"), \
-             patch("quipcli.agent.execute_tool_call", return_value="ok"):
+        looping_resp = self._response(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "run_shell", "arguments": "{}"},
+                    }
+                ],
+            }
+        )
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.agent.execute_tool_call", return_value="ok"),
+        ):
             cls.return_value = _mock_conn(looping_resp)
-            _text, stats = quipcli.run_agent_loop(self._msgs(), "m", max_steps=3, render_markdown=False)
+            _text, stats = quipcli.run_agent_loop(
+                self._msgs(), "m", max_steps=3, render_markdown=False
+            )
         assert cls.call_count == 3
         assert "max steps" in capsys.readouterr().err
         assert stats is not None
@@ -1122,14 +1275,18 @@ class TestAgentLoop:
     def test_no_web_excludes_server_tools_from_request(self, mock_http):
         body = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
         http_cls = mock_http(MockHTTPResponse(200, body))
-        quipcli.run_agent_loop(self._msgs(), "m", server_tools=False, render_markdown=False)
+        quipcli.run_agent_loop(
+            self._msgs(), "m", server_tools=False, render_markdown=False
+        )
         _, _, body_arg, _ = http_cls.return_value.request.call_args[0]
         sent_types = [t["type"] for t in json.loads(body_arg)["tools"]]
         assert "openrouter:web_search" not in sent_types
         assert "openrouter:web_fetch" not in sent_types
 
     def test_error_payload_exits(self, mock_http, capsys):
-        mock_http(MockHTTPResponse(200, json.dumps({"error": {"message": "boom"}}).encode()))
+        mock_http(
+            MockHTTPResponse(200, json.dumps({"error": {"message": "boom"}}).encode())
+        )
         with pytest.raises(SystemExit) as exc:
             quipcli.run_agent_loop(self._msgs(), "m", render_markdown=False)
         assert exc.value.code == 1
@@ -1140,10 +1297,15 @@ class TestMainStatus:
     def test_api_key_masked(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setattr(quipcli.constants, "_CONFIG_DIR", tmp_path)
         monkeypatch.setattr(quipcli.constants, "_CONFIG_FILE", tmp_path / "config.json")
-        monkeypatch.setattr(quipcli.constants, "_MODELS_CACHE", tmp_path / "models.json")
+        monkeypatch.setattr(
+            quipcli.constants, "_MODELS_CACHE", tmp_path / "models.json"
+        )
         monkeypatch.setattr(quipcli.constants, "_HISTORY_DB", tmp_path / "history.db")
-        monkeypatch.setattr(quipcli.constants, "_API_KEY", "sk-or-v1-abcdef1234567890abcd")
+        monkeypatch.setattr(
+            quipcli.constants, "_API_KEY", "sk-or-v1-abcdef1234567890abcd"
+        )
         from quipcli.entry import _do_status
+
         _do_status()
         out = capsys.readouterr().out
         assert "sk-or-v1-abcdef1234567890abcd" not in out
@@ -1152,30 +1314,43 @@ class TestMainStatus:
 
 # ── confirm_and_run ───────────────────────────────────────────────────────────
 
+
 class TestConfirmAndRun:
     def test_y_runs_command(self):
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
-            with patch("builtins.input", return_value="y"), pytest.raises(SystemExit) as exc:
+            with (
+                patch("builtins.input", return_value="y"),
+                pytest.raises(SystemExit) as exc,
+            ):
                 quipcli.confirm_and_run("ls -la", "list files")
         assert exc.value.code == 0
-        run.assert_called_once_with("ls -la", shell=True)
+        run.assert_called_once_with("ls -la", shell=True, check=False)
 
     def test_empty_enter_runs_command(self):
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
-            with patch("builtins.input", return_value=""), pytest.raises(SystemExit) as exc:
+            with (
+                patch("builtins.input", return_value=""),
+                pytest.raises(SystemExit) as exc,
+            ):
                 quipcli.confirm_and_run("ls", "list")
         assert exc.value.code == 0
         run.assert_called_once()
 
     def test_n_aborts(self):
-        with patch("builtins.input", return_value="n"), pytest.raises(SystemExit) as exc:
+        with (
+            patch("builtins.input", return_value="n"),
+            pytest.raises(SystemExit) as exc,
+        ):
             quipcli.confirm_and_run("ls", "list")
         assert exc.value.code == 0
 
     def test_ctrl_c_aborts(self):
-        with patch("builtins.input", side_effect=KeyboardInterrupt), pytest.raises(SystemExit) as exc:
+        with (
+            patch("builtins.input", side_effect=KeyboardInterrupt),
+            pytest.raises(SystemExit) as exc,
+        ):
             quipcli.confirm_and_run("ls", "list")
         assert exc.value.code == 0
 
@@ -1184,7 +1359,7 @@ class TestConfirmAndRun:
             run.return_value.returncode = 0
             with patch("builtins.input", return_value="y"), pytest.raises(SystemExit):
                 quipcli.confirm_and_run("```bash\nls -la\n```", "list")
-        run.assert_called_once_with("ls -la", shell=True)
+        run.assert_called_once_with("ls -la", shell=True, check=False)
 
     def test_e_opens_editor_then_reruns(self):
         edited_cmd = "ls -lah"
@@ -1197,10 +1372,11 @@ class TestConfirmAndRun:
                 pytest.raises(SystemExit),
             ):
                 quipcli.confirm_and_run("ls -la", "list files")
-        run.assert_called_once_with(edited_cmd, shell=True)
+        run.assert_called_once_with(edited_cmd, shell=True, check=False)
 
 
 # ── _edit_in_editor ───────────────────────────────────────────────────────────
+
 
 class TestEditInEditor:
     def test_strips_comment_lines(self, tmp_path, monkeypatch):
@@ -1213,7 +1389,7 @@ class TestEditInEditor:
             mock_ntf.return_value.name = str(tmpfile)
             with patch("quipcli.execute.subprocess.run") as run, patch("os.unlink"):
                 result = quipcli._edit_in_editor("ls -la", "test")
-        run.assert_called_once_with(["true", str(tmpfile)])
+        run.assert_called_once_with(["true", str(tmpfile)], check=False)
         assert "#" not in result
         assert "ls -la" in result
 
@@ -1227,10 +1403,11 @@ class TestEditInEditor:
             mock_ntf.return_value.name = str(tmpfile)
             with patch("quipcli.execute.subprocess.run") as run, patch("os.unlink"):
                 quipcli._edit_in_editor("ls", "test")
-        run.assert_called_once_with(["code", "--wait", str(tmpfile)])
+        run.assert_called_once_with(["code", "--wait", str(tmpfile)], check=False)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
+
 
 class TestConfig:
     def test_load_missing_returns_empty(self, tmp_path):
@@ -1239,8 +1416,10 @@ class TestConfig:
 
     def test_round_trip(self, tmp_path):
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             quipcli._save_config({"default_model": "openai/gpt-4o"})
             result = quipcli._load_config()
         assert result == {"default_model": "openai/gpt-4o"}
@@ -1273,8 +1452,10 @@ class TestConfig:
     def test_ensure_config_creates_file(self, monkeypatch, tmp_path):
         monkeypatch.delenv("LLM_CMD_MODEL", raising=False)
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             cfg = quipcli._ensure_config()
         assert cfg_file.exists()
         assert "default_model" not in cfg
@@ -1283,36 +1464,45 @@ class TestConfig:
     def test_ensure_config_does_not_persist_env_override(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LLM_CMD_MODEL", "temp/one-off-model")
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             quipcli._ensure_config()
         assert "default_model" not in json.loads(cfg_file.read_text())
 
     def test_ensure_config_does_not_mask_env_override(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LLM_CMD_MODEL", "temp/one-off-model")
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             quipcli._ensure_config()
             assert quipcli._resolve_default_model() == "temp/one-off-model"
 
     def test_ensure_config_leaves_existing_file_untouched(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"default_model": "custom/model"}))
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             cfg = quipcli._ensure_config()
         assert cfg == {"default_model": "custom/model"}
 
 
 # ── _seed_defaults ────────────────────────────────────────────────────────────
 
+
 class TestSeedDefaults:
     def test_writes_missing_keys(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"default_model": "x"}))
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             cfg = quipcli._seed_defaults({"chat_system_prompt": "be nice"})
         assert cfg["chat_system_prompt"] == "be nice"
         assert json.loads(cfg_file.read_text())["chat_system_prompt"] == "be nice"
@@ -1320,8 +1510,10 @@ class TestSeedDefaults:
     def test_does_not_overwrite_existing_key(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"chat_system_prompt": "custom"}))
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             quipcli._seed_defaults({"chat_system_prompt": "default"})
         assert json.loads(cfg_file.read_text())["chat_system_prompt"] == "custom"
 
@@ -1329,13 +1521,16 @@ class TestSeedDefaults:
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"a": "1"}))
         mtime_before = cfg_file.stat().st_mtime_ns
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+        ):
             quipcli._seed_defaults({"a": "ignored"})
         assert cfg_file.stat().st_mtime_ns == mtime_before
 
 
 # ── Machine context ───────────────────────────────────────────────────────────
+
 
 class TestMachineContext:
     def test_includes_os_and_shell(self, monkeypatch):
@@ -1358,6 +1553,7 @@ class TestMachineContext:
 
 # ── History / SQLite ──────────────────────────────────────────────────────────
 
+
 class TestHistory:
     def test_record_and_summary(self, tmp_path):
         stats = _UsageStats(
@@ -1366,8 +1562,10 @@ class TestHistory:
             completion_tokens=20,
             cost_usd=0.0002,
         )
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
             quipcli._record_usage(stats, "chat")
             s = quipcli._cost_summary(1)
         assert s["requests"] == 1
@@ -1381,29 +1579,36 @@ class TestHistory:
 
     def test_record_never_crashes(self, tmp_path):
         stats = _UsageStats(model="m", prompt_tokens=1, completion_tokens=1)
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path), \
-             patch("sqlite3.connect", side_effect=Exception("db error")):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+            patch("sqlite3.connect", side_effect=sqlite3.OperationalError("db error")),
+        ):
             quipcli._record_usage(stats, "chat")  # must not raise
 
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
+
 class TestSessions:
     def test_record_and_retrieve_messages(self, tmp_path):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
-            quipcli._record_message("sess1", "user",      "hello",    None,  None, "chat")
-            quipcli._record_message("sess1", "assistant", "world",    "gpt", None, "chat")
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
+            quipcli._record_message("sess1", "user", "hello", None, None, "chat")
+            quipcli._record_message("sess1", "assistant", "world", "gpt", None, "chat")
             msgs = quipcli._get_session_messages("sess1")
         assert len(msgs) == 2
-        assert msgs[0] == {"role": "user",      "content": "hello"}
+        assert msgs[0] == {"role": "user", "content": "hello"}
         assert msgs[1] == {"role": "assistant", "content": "world"}
 
     def test_last_session_id(self, tmp_path):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
-            quipcli._record_message("first",  "user", "a", None, None, "chat")
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
+            quipcli._record_message("first", "user", "a", None, None, "chat")
             quipcli._record_message("second", "user", "b", None, None, "chat")
             last = quipcli._last_session_id()
         assert last == "second"
@@ -1418,24 +1623,30 @@ class TestSessions:
         assert msgs == []
 
     def test_resolve_session_named_new(self, tmp_path):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
             sid, msgs = quipcli._resolve_session("myconv", False)
         assert sid == "myconv"
         assert msgs == []
 
     def test_resolve_session_named_existing(self, tmp_path):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
-            quipcli._record_message("myconv", "user",      "hi",  None,  None, "chat")
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
+            quipcli._record_message("myconv", "user", "hi", None, None, "chat")
             quipcli._record_message("myconv", "assistant", "hey", "gpt", None, "chat")
             sid, msgs = quipcli._resolve_session("myconv", False)
         assert sid == "myconv"
         assert len(msgs) == 2
 
     def test_resolve_session_auto_generates_name(self, tmp_path, capsys):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
             sid, msgs = quipcli._resolve_session("auto", False)
         assert sid is not None
         assert sid.startswith("auto-")
@@ -1443,16 +1654,21 @@ class TestSessions:
         assert "Session:" in capsys.readouterr().err
 
     def test_resolve_follow_up(self, tmp_path, capsys):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
-            quipcli._record_message("prev", "user",      "q", None,  None, "chat")
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
+            quipcli._record_message("prev", "user", "q", None, None, "chat")
             quipcli._record_message("prev", "assistant", "a", "gpt", None, "chat")
             sid, msgs = quipcli._resolve_session(None, follow_up=True)
         assert sid == "prev"
         assert len(msgs) == 2
 
     def test_resolve_follow_up_no_history_exits(self, tmp_path):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"), pytest.raises(SystemExit):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"),
+            pytest.raises(SystemExit),
+        ):
             quipcli._resolve_session(None, follow_up=True)
 
     def test_session_and_followup_mutually_exclusive(self):
@@ -1460,29 +1676,39 @@ class TestSessions:
             quipcli._resolve_session("myconv", follow_up=True)
 
     def test_named_existing_session_announced_with_count(self, tmp_path, capsys):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
-            quipcli._record_message("myconv", "user",      "hi",  None,  None, "chat")
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
+            quipcli._record_message("myconv", "user", "hi", None, None, "chat")
             quipcli._record_message("myconv", "assistant", "hey", "gpt", None, "chat")
             quipcli._resolve_session("myconv", False)
         assert "Session: myconv (2 messages)" in capsys.readouterr().err
 
     def test_quiet_suppresses_session_announcement(self, tmp_path, capsys):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
             quipcli._resolve_session("auto", False, quiet=True)
         assert capsys.readouterr().err == ""
 
     def test_multimodal_content_round_trip(self, tmp_path):
-        multimodal = [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}]
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"), \
-             patch("quipcli.constants._DATA_DIR", tmp_path):
+        multimodal = [
+            {"type": "text", "text": "describe"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+        ]
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+        ):
             quipcli._record_message("mm", "user", multimodal, None, None, "chat")
             msgs = quipcli._get_session_messages("mm")
         assert msgs[0]["content"] == multimodal
 
 
 # ── Multimodal ────────────────────────────────────────────────────────────────
+
 
 class TestIsImageUrl:
     def test_http_jpg(self):
@@ -1508,7 +1734,9 @@ class TestBuildUserContent:
         assert mods == set()
 
     def test_image_url_in_words(self):
-        content, mods = _build_user_content(["describe", "https://example.com/photo.jpg"])
+        content, mods = _build_user_content(
+            ["describe", "https://example.com/photo.jpg"]
+        )
         assert isinstance(content, list)
         assert mods == {"image"}
         text_part = next(p for p in content if p.get("type") == "text")
@@ -1596,17 +1824,38 @@ class TestModalitySupport:
         return cache
 
     def test_supported_modality_no_error(self, tmp_path):
-        cache = self._make_cache(tmp_path, [
-            {"id": "m", "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}}
-        ])
+        cache = self._make_cache(
+            tmp_path,
+            [
+                {
+                    "id": "m",
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
+                }
+            ],
+        )
         with patch("quipcli.constants._MODELS_CACHE", cache):
             quipcli._check_modality_support("m", {"image"})  # should not raise
 
     def test_unsupported_modality_exits(self, tmp_path, capsys):
-        cache = self._make_cache(tmp_path, [
-            {"id": "m", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}
-        ])
-        with patch("quipcli.constants._MODELS_CACHE", cache), pytest.raises(SystemExit) as exc:
+        cache = self._make_cache(
+            tmp_path,
+            [
+                {
+                    "id": "m",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                }
+            ],
+        )
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            pytest.raises(SystemExit) as exc,
+        ):
             quipcli._check_modality_support("m", {"image"})
         assert exc.value.code == 1
         err = capsys.readouterr().err
@@ -1616,14 +1865,35 @@ class TestModalitySupport:
         quipcli._check_modality_support("any", set())  # should not raise
 
     def test_list_by_modality(self, tmp_path):
-        cache = self._make_cache(tmp_path, [
-            {"id": "img-model", "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]}},
-            {"id": "text-only", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}},
-            {"id": "audio-gen", "architecture": {"input_modalities": ["text"], "output_modalities": ["text", "audio"]}},
-        ])
+        cache = self._make_cache(
+            tmp_path,
+            [
+                {
+                    "id": "img-model",
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"],
+                    },
+                },
+                {
+                    "id": "text-only",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text"],
+                    },
+                },
+                {
+                    "id": "audio-gen",
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["text", "audio"],
+                    },
+                },
+            ],
+        )
         with patch("quipcli.constants._MODELS_CACHE", cache):
             img_models = quipcli._list_models_by_modality(in_mods=["image"])
-            audio_out  = quipcli._list_models_by_modality(out_mods=["audio"])
+            audio_out = quipcli._list_models_by_modality(out_mods=["audio"])
         assert "img-model" in img_models
         assert "text-only" not in img_models
         assert "audio-gen" in audio_out
@@ -1631,6 +1901,7 @@ class TestModalitySupport:
 
 
 # ── model/config/status/cost flags ─────────────────────────────────────────────
+
 
 class TestModelConfigFlags:
     def _cache(self, tmp_path, ids):
@@ -1640,9 +1911,11 @@ class TestModelConfigFlags:
 
     def test_set_with_exact_model(self, tmp_path, capsys):
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.constants._MODELS_CACHE", tmp_path / "models.json"):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "models.json"),
+        ):
             quipcli._do_model_set("openai/gpt-4o")
         assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o"
         assert "openai/gpt-4o" in capsys.readouterr().out
@@ -1650,54 +1923,70 @@ class TestModelConfigFlags:
     def test_set_with_unique_substring(self, tmp_path):
         cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.constants._MODELS_CACHE", cache):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+        ):
             quipcli._do_model_set("haiku")
-        assert json.loads(cfg_file.read_text())["default_model"] == "anthropic/claude-3-5-haiku"
+        assert (
+            json.loads(cfg_file.read_text())["default_model"]
+            == "anthropic/claude-3-5-haiku"
+        )
 
     def test_set_no_value_uses_tui_picker_when_fzf_available(self, tmp_path):
         cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("shutil.which", return_value="/usr/bin/fzf"), \
-             patch("quipcli.tui.pick_model_interactive", return_value="openai/gpt-4o"):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("shutil.which", return_value="/usr/bin/fzf"),
+            patch("quipcli.tui.pick_model_interactive", return_value="openai/gpt-4o"),
+        ):
             quipcli._do_model_set("")
         assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o"
 
     def test_set_no_value_aborts_when_tui_picker_cancelled(self, tmp_path, capsys):
         cache = self._cache(tmp_path, ["openai/gpt-4o"])
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("shutil.which", return_value="/usr/bin/fzf"), \
-             patch("quipcli.tui.pick_model_interactive", return_value=None):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("shutil.which", return_value="/usr/bin/fzf"),
+            patch("quipcli.tui.pick_model_interactive", return_value=None),
+        ):
             quipcli._do_model_set("")
         assert "Aborted" in capsys.readouterr().err
 
     def test_set_interactive_by_index_falls_back_without_fzf(self, tmp_path):
         cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("shutil.which", return_value=None), \
-             patch("builtins.input", return_value="2"):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("shutil.which", return_value=None),
+            patch("builtins.input", return_value="2"),
+        ):
             quipcli._do_model_set("")
         assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o"
 
     def test_set_interactive_by_name_falls_back_without_fzf(self, tmp_path):
         cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("shutil.which", return_value=None), \
-             patch("builtins.input", return_value="haiku"):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("shutil.which", return_value=None),
+            patch("builtins.input", return_value="haiku"),
+        ):
             quipcli._do_model_set("")
-        assert json.loads(cfg_file.read_text())["default_model"] == "anthropic/claude-3-5-haiku"
+        assert (
+            json.loads(cfg_file.read_text())["default_model"]
+            == "anthropic/claude-3-5-haiku"
+        )
 
     def test_set_interactive_no_cache_errors_without_fzf(self, tmp_path):
         with (
@@ -1725,15 +2014,20 @@ class TestModelConfigFlags:
         cache = self._cache(tmp_path, ["anthropic/claude-3-5-haiku", "openai/gpt-4o"])
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"default_model": "openai/gpt-4o"}))
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._MODELS_CACHE", cache):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+        ):
             quipcli._do_models(None, None)
         out = capsys.readouterr().out
         assert "* " in out
         assert "openai/gpt-4o" in out
 
     def test_models_no_cache_errors(self, tmp_path):
-        with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"), pytest.raises(SystemExit) as exc:
+        with (
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"),
+            pytest.raises(SystemExit) as exc,
+        ):
             quipcli._do_models(None, None)
         assert exc.value.code == 1
 
@@ -1749,10 +2043,12 @@ class TestModelConfigFlags:
     def test_config_edit_opens_editor(self, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.json"
         monkeypatch.setenv("EDITOR", "myeditor")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("subprocess.run") as run:
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("subprocess.run") as run,
+        ):
             quipcli._do_config_edit()
-        run.assert_called_once_with(["myeditor", str(cfg_file)])
+        run.assert_called_once_with(["myeditor", str(cfg_file)], check=False)
 
     def test_cost_invalid_period_exits(self, capsys):
         with pytest.raises(SystemExit) as exc:
@@ -1767,15 +2063,21 @@ class TestModelConfigFlags:
 
 # ── tui ───────────────────────────────────────────────────────────────────────
 
+
 class TestTuiHelpers:
     def test_model_id_from_line_with_marker(self):
         assert quipcli._model_id_from_line("* openai/gpt-4o") == "openai/gpt-4o"
 
     def test_model_id_from_line_without_marker(self):
-        assert quipcli._model_id_from_line("  anthropic/claude-3-5-haiku") == "anthropic/claude-3-5-haiku"
+        assert (
+            quipcli._model_id_from_line("  anthropic/claude-3-5-haiku")
+            == "anthropic/claude-3-5-haiku"
+        )
 
     def test_key_from_line(self):
-        assert quipcli._key_from_line("default_model = openai/gpt-4o") == "default_model"
+        assert (
+            quipcli._key_from_line("default_model = openai/gpt-4o") == "default_model"
+        )
 
     def test_config_lines_shows_not_set(self):
         lines = quipcli._config_lines({})
@@ -1794,8 +2096,10 @@ class TestTuiHelpers:
         cache.write_text(json.dumps({"data": [{"id": "a"}, {"id": "b"}]}))
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text(json.dumps({"default_model": "b"}))
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.constants._CONFIG_FILE", cfg_file):
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+        ):
             lines = quipcli._model_lines()
         assert lines[0] == "  a"
         assert quipcli._model_id_from_line(lines[1]) == "b"
@@ -1805,13 +2109,27 @@ class TestTuiHelpers:
 class TestTuiModelInfo:
     def _cache(self, tmp_path):
         cache = tmp_path / "models.json"
-        cache.write_text(json.dumps({"data": [{
-            "id": "openai/gpt-4o-mini",
-            "name": "GPT-4o mini",
-            "context_length": 128000,
-            "pricing": {"prompt": "0.00000015", "completion": "0.0000006"},
-            "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
-        }]}))
+        cache.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "id": "openai/gpt-4o-mini",
+                            "name": "GPT-4o mini",
+                            "context_length": 128000,
+                            "pricing": {
+                                "prompt": "0.00000015",
+                                "completion": "0.0000006",
+                            },
+                            "architecture": {
+                                "input_modalities": ["text", "image"],
+                                "output_modalities": ["text"],
+                            },
+                        }
+                    ]
+                }
+            )
+        )
         return cache
 
     def test_prints_formatted_fields(self, tmp_path, capsys):
@@ -1833,15 +2151,26 @@ class TestTuiModelInfo:
 
     def test_prints_wrapped_description(self, tmp_path, capsys):
         cache = tmp_path / "models.json"
-        cache.write_text(json.dumps({"data": [{
-            "id": "openai/gpt-4o-mini",
-            "name": "GPT-4o mini",
-            "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
-            "description": "word " * 40,
-            "pricing": {}, "architecture": {},
-        }]}))
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "rankings.json"):
+        cache.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "id": "openai/gpt-4o-mini",
+                            "name": "GPT-4o mini",
+                            "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
+                            "description": "word " * 40,
+                            "pricing": {},
+                            "architecture": {},
+                        }
+                    ]
+                }
+            )
+        )
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "rankings.json"),
+        ):
             quipcli._print_model_info("  openai/gpt-4o-mini")
         out = capsys.readouterr().out
         assert "word word" in out
@@ -1849,25 +2178,51 @@ class TestTuiModelInfo:
 
     def test_prints_usage_rank_when_cached(self, tmp_path, capsys):
         cache = tmp_path / "models.json"
-        cache.write_text(json.dumps({"data": [{
-            "id": "openai/gpt-4o-mini",
-            "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
-            "pricing": {}, "architecture": {},
-        }]}))
+        cache.write_text(
+            json.dumps(
+                {
+                    "data": [
+                        {
+                            "id": "openai/gpt-4o-mini",
+                            "canonical_slug": "openai/gpt-4o-mini-2024-07-18",
+                            "pricing": {},
+                            "architecture": {},
+                        }
+                    ]
+                }
+            )
+        )
         rankings = tmp_path / "rankings.json"
-        rankings.write_text(json.dumps({"date": "2026-07-23", "data": [
-            {"rank": 3, "model_permaslug": "openai/gpt-4o-mini-2024-07-18", "total_tokens": 42_000_000},
-        ]}))
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.constants._RANKINGS_CACHE", rankings):
+        rankings.write_text(
+            json.dumps(
+                {
+                    "date": "2026-07-23",
+                    "data": [
+                        {
+                            "rank": 3,
+                            "model_permaslug": "openai/gpt-4o-mini-2024-07-18",
+                            "total_tokens": 42_000_000,
+                        },
+                    ],
+                }
+            )
+        )
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._RANKINGS_CACHE", rankings),
+        ):
             quipcli._print_model_info("  openai/gpt-4o-mini")
         out = capsys.readouterr().out
         assert "usage_rank: #3 of top 50" in out
         assert "42,000,000 tokens/day" in out
 
     def test_no_usage_rank_line_without_cache(self, tmp_path, capsys):
-        with patch("quipcli.constants._MODELS_CACHE", self._cache(tmp_path)), \
-             patch("quipcli.constants._RANKINGS_CACHE", tmp_path / "missing-rankings.json"):
+        with (
+            patch("quipcli.constants._MODELS_CACHE", self._cache(tmp_path)),
+            patch(
+                "quipcli.constants._RANKINGS_CACHE", tmp_path / "missing-rankings.json"
+            ),
+        ):
             quipcli._print_model_info("* openai/gpt-4o-mini")
         out = capsys.readouterr().out
         assert "usage_rank" not in out
@@ -1878,9 +2233,11 @@ class TestModelsView:
         cache = tmp_path / "models.json"
         cache.write_text(json.dumps({"data": [{"id": "a"}]}))
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.tui._run_fzf", return_value="  a"):
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.tui._run_fzf", return_value="  a"),
+        ):
             result = quipcli._models_view(picker_mode=True)
         assert result == "a"
         assert not cfg_file.exists()
@@ -1889,10 +2246,12 @@ class TestModelsView:
         cache = tmp_path / "models.json"
         cache.write_text(json.dumps({"data": [{"id": "a"}]}))
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.tui._run_fzf", return_value="  a"):
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.tui._run_fzf", return_value="  a"),
+        ):
             result = quipcli._models_view(picker_mode=False)
         assert result == "a"
         assert json.loads(cfg_file.read_text())["default_model"] == "a"
@@ -1901,13 +2260,17 @@ class TestModelsView:
     def test_escape_returns_none(self, tmp_path):
         cache = tmp_path / "models.json"
         cache.write_text(json.dumps({"data": [{"id": "a"}]}))
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.tui._run_fzf", return_value=None):
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.tui._run_fzf", return_value=None),
+        ):
             assert quipcli._models_view(picker_mode=True) is None
 
     def test_empty_cache_skips_fzf(self, tmp_path):
-        with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"), \
-             patch("quipcli.tui._run_fzf") as run_fzf:
+        with (
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"),
+            patch("quipcli.tui._run_fzf") as run_fzf,
+        ):
             result = quipcli._models_view()
         assert result is None
         run_fzf.assert_not_called()
@@ -1916,9 +2279,11 @@ class TestModelsView:
         cache = tmp_path / "models.json"
         cache.write_text(json.dumps({"data": [{"id": "a"}]}))
         cfg_file = tmp_path / "config.json"
-        with patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.tui._run_fzf", return_value="  a"):
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.tui._run_fzf", return_value="  a"),
+        ):
             assert quipcli.pick_model_interactive() == "a"
         assert not cfg_file.exists()
 
@@ -1927,21 +2292,35 @@ class TestConfigView:
     def test_system_prompt_edit(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("{}")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.tui._run_fzf", side_effect=["system_prompt = (not set)", None]), \
-             patch("quipcli.tui._edit_text_value", return_value="prefer pacman"):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch(
+                "quipcli.tui._run_fzf", side_effect=["system_prompt = (not set)", None]
+            ),
+            patch("quipcli.tui._edit_text_value", return_value="prefer pacman"),
+        ):
             quipcli._config_view()
         assert json.loads(cfg_file.read_text())["system_prompt"] == "prefer pacman"
 
-    @pytest.mark.parametrize("key", ["chat_system_prompt", "execute_system_prompt", "code_system_prompt", "agent_system_prompt"])
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "chat_system_prompt",
+            "execute_system_prompt",
+            "code_system_prompt",
+            "agent_system_prompt",
+        ],
+    )
     def test_mode_prompt_keys_are_editable(self, tmp_path, key):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("{}")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.tui._run_fzf", side_effect=[f"{key} = (not set)", None]), \
-             patch("quipcli.tui._edit_text_value", return_value="be terse"):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.tui._run_fzf", side_effect=[f"{key} = (not set)", None]),
+            patch("quipcli.tui._edit_text_value", return_value="be terse"),
+        ):
             quipcli._config_view()
         assert json.loads(cfg_file.read_text())[key] == "be terse"
 
@@ -1961,10 +2340,16 @@ class TestConfigView:
     def test_default_model_drills_into_models_view(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("{}")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.tui._run_fzf", side_effect=["default_model = (not set)", None]), \
-             patch("quipcli.tui._models_view", return_value="openai/gpt-4o") as models_view:
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch(
+                "quipcli.tui._run_fzf", side_effect=["default_model = (not set)", None]
+            ),
+            patch(
+                "quipcli.tui._models_view", return_value="openai/gpt-4o"
+            ) as models_view,
+        ):
             quipcli._config_view()
         models_view.assert_called_once_with(picker_mode=True)
         assert json.loads(cfg_file.read_text())["default_model"] == "openai/gpt-4o"
@@ -1972,57 +2357,77 @@ class TestConfigView:
     def test_ollama_model_picks_from_local_list(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("{}")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.tui._ollama_models", return_value=["llama3.2", "mistral"]), \
-             patch("quipcli.tui._run_fzf", side_effect=["ollama_model = (not set)", "  mistral", None]):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.tui._ollama_models", return_value=["llama3.2", "mistral"]),
+            patch(
+                "quipcli.tui._run_fzf",
+                side_effect=["ollama_model = (not set)", "  mistral", None],
+            ),
+        ):
             quipcli._config_view()
         assert json.loads(cfg_file.read_text())["ollama_model"] == "mistral"
 
     def test_ollama_model_falls_back_to_text_edit_when_unreachable(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("{}")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.constants._CONFIG_DIR", tmp_path), \
-             patch("quipcli.tui._ollama_models", return_value=None), \
-             patch("quipcli.tui._edit_text_value", return_value="qwen3:8b"), \
-             patch("quipcli.tui._run_fzf", side_effect=["ollama_model = (not set)", None]):
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._CONFIG_DIR", tmp_path),
+            patch("quipcli.tui._ollama_models", return_value=None),
+            patch("quipcli.tui._edit_text_value", return_value="qwen3:8b"),
+            patch(
+                "quipcli.tui._run_fzf", side_effect=["ollama_model = (not set)", None]
+            ),
+        ):
             quipcli._config_view()
         assert json.loads(cfg_file.read_text())["ollama_model"] == "qwen3:8b"
 
     def test_escape_exits_immediately(self, tmp_path):
         cfg_file = tmp_path / "config.json"
         cfg_file.write_text("{}")
-        with patch("quipcli.constants._CONFIG_FILE", cfg_file), \
-             patch("quipcli.tui._run_fzf", return_value=None) as run_fzf:
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.tui._run_fzf", return_value=None) as run_fzf,
+        ):
             quipcli._config_view()
         run_fzf.assert_called_once()
 
 
 class TestRunTui:
     def test_missing_fzf_exits_with_error(self, capsys):
-        with patch("quipcli.tui._fzf_available", return_value=False), pytest.raises(SystemExit) as exc:
+        with (
+            patch("quipcli.tui._fzf_available", return_value=False),
+            pytest.raises(SystemExit) as exc,
+        ):
             quipcli.run_tui()
         assert exc.value.code == 1
         assert "requires fzf" in capsys.readouterr().err
 
     def test_escape_at_top_menu_returns(self):
-        with patch("quipcli.tui._fzf_available", return_value=True), \
-             patch("quipcli.tui._run_fzf", return_value=None) as run_fzf:
+        with (
+            patch("quipcli.tui._fzf_available", return_value=True),
+            patch("quipcli.tui._run_fzf", return_value=None) as run_fzf,
+        ):
             quipcli.run_tui()
         run_fzf.assert_called_once()
 
     def test_selecting_models_then_escaping_returns_to_menu(self):
-        with patch("quipcli.tui._fzf_available", return_value=True), \
-             patch("quipcli.tui._run_fzf", side_effect=["Models", None]), \
-             patch("quipcli.tui._models_view") as models_view:
+        with (
+            patch("quipcli.tui._fzf_available", return_value=True),
+            patch("quipcli.tui._run_fzf", side_effect=["Models", None]),
+            patch("quipcli.tui._models_view") as models_view,
+        ):
             quipcli.run_tui()
         models_view.assert_called_once_with(picker_mode=False)
 
     def test_selecting_config_then_escaping_returns_to_menu(self):
-        with patch("quipcli.tui._fzf_available", return_value=True), \
-             patch("quipcli.tui._run_fzf", side_effect=["Config", None]), \
-             patch("quipcli.tui._config_view") as config_view:
+        with (
+            patch("quipcli.tui._fzf_available", return_value=True),
+            patch("quipcli.tui._run_fzf", side_effect=["Config", None]),
+            patch("quipcli.tui._config_view") as config_view,
+        ):
             quipcli.run_tui()
         config_view.assert_called_once()
 

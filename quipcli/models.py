@@ -23,7 +23,7 @@ def _load_models() -> list[str]:
     try:
         data = json.loads(constants._MODELS_CACHE.read_text())
         return sorted(m["id"] for m in data.get("data", []))
-    except (json.JSONDecodeError, KeyError, TypeError):
+    except json.JSONDecodeError, KeyError, TypeError:
         return []
 
 
@@ -32,7 +32,7 @@ def _load_models_full() -> list[dict]:
         return []
     try:
         return json.loads(constants._MODELS_CACHE.read_text()).get("data", [])
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return []
 
 
@@ -48,7 +48,8 @@ def _maybe_update_models_bg() -> None:
     pkg_parent = str(Path(__file__).parent.parent)
     subprocess.Popen(
         [
-            sys.executable, "-c",
+            sys.executable,
+            "-c",
             (
                 f"import sys; sys.path.insert(0, {pkg_parent!r});"
                 f"from quipcli.models import _fetch_models; _fetch_models()"
@@ -66,9 +67,15 @@ def _fetch_models() -> list[str]:
     """Fetch model list from provider, save to cache, return sorted IDs."""
     url = _models_url()
     parsed = urlparse(url)
-    conn = http.client.HTTPSConnection(parsed.netloc, context=constants._SSL_CTX, timeout=30)
+    conn = http.client.HTTPSConnection(
+        parsed.netloc, context=constants._SSL_CTX, timeout=30
+    )
     try:
-        conn.request("GET", parsed.path, headers={"Authorization": f"Bearer {constants._API_KEY}"})
+        conn.request(
+            "GET",
+            parsed.path,
+            headers={"Authorization": f"Bearer {constants._API_KEY}"},
+        )
         resp = conn.getresponse()
     except OSError as e:
         print(f"Error: connection failed: {e}", file=sys.stderr)
@@ -97,14 +104,25 @@ def _fetch_rankings() -> list[dict]:
     OpenRouter doesn't publish one. Only meaningful against OpenRouter
     itself, and requires an API key (unlike the public /models endpoint)."""
     if constants._API_URL != constants._DEFAULT_API_URL:
-        print("Error: --update-rankings only supports OpenRouter (the default provider).", file=sys.stderr)
+        print(
+            "Error: --update-rankings only supports OpenRouter (the default provider).",
+            file=sys.stderr,
+        )
         return []
     if not constants._API_KEY:
-        print("Error: --update-rankings requires an OpenRouter API key.", file=sys.stderr)
+        print(
+            "Error: --update-rankings requires an OpenRouter API key.", file=sys.stderr
+        )
         return []
-    conn = http.client.HTTPSConnection(_RANKINGS_HOST, context=constants._SSL_CTX, timeout=30)
+    conn = http.client.HTTPSConnection(
+        _RANKINGS_HOST, context=constants._SSL_CTX, timeout=30
+    )
     try:
-        conn.request("GET", _RANKINGS_PATH, headers={"Authorization": f"Bearer {constants._API_KEY}"})
+        conn.request(
+            "GET",
+            _RANKINGS_PATH,
+            headers={"Authorization": f"Bearer {constants._API_KEY}"},
+        )
         resp = conn.getresponse()
     except OSError as e:
         print(f"Error: connection failed: {e}", file=sys.stderr)
@@ -121,7 +139,8 @@ def _fetch_rankings() -> list[dict]:
     rows = payload.get("data", [])
     latest_date = max((r["date"] for r in rows if "date" in r), default=None)
     latest = [
-        r for r in rows
+        r
+        for r in rows
         if r.get("date") == latest_date and r.get("model_permaslug") != "other"
     ]
     latest.sort(key=lambda r: int(r.get("total_tokens", 0) or 0), reverse=True)
@@ -145,7 +164,7 @@ def _load_rankings() -> dict:
         return {}
     try:
         return json.loads(constants._RANKINGS_CACHE.read_text())
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return {}
 
 
@@ -196,8 +215,12 @@ def _list_models_by_modality(
     result = []
     for m in _load_models_full():
         arch = m.get("architecture", {})
-        in_ok  = not in_mods  or all(x in arch.get("input_modalities",  []) for x in in_mods)
-        out_ok = not out_mods or all(x in arch.get("output_modalities", []) for x in out_mods)
+        in_ok = not in_mods or all(
+            x in arch.get("input_modalities", []) for x in in_mods
+        )
+        out_ok = not out_mods or all(
+            x in arch.get("output_modalities", []) for x in out_mods
+        )
         if in_ok and out_ok:
             result.append(m["id"])
     return sorted(result)
@@ -208,7 +231,10 @@ def _check_modality_support(model: str, needed: set[str]) -> None:
         return
     arch = _load_model_arch(model)
     if not arch:
-        print(f"Warning: cannot verify modality support for {model} (cache miss).", file=sys.stderr)
+        print(
+            f"Warning: cannot verify modality support for {model} (cache miss).",
+            file=sys.stderr,
+        )
         return
     supported = set(arch.get("input_modalities", []))
     missing = needed - supported
@@ -224,5 +250,8 @@ def _check_modality_support(model: str, needed: set[str]) -> None:
         for m in compatible[:10]:
             print(f"  {m}", file=sys.stderr)
         if len(compatible) > 10:
-            print(f"  … and {len(compatible) - 10} more. Use: qp --models --in {','.join(sorted(needed))}", file=sys.stderr)
+            print(
+                f"  … and {len(compatible) - 10} more. Use: qp --models --in {','.join(sorted(needed))}",
+                file=sys.stderr,
+            )
     sys.exit(1)

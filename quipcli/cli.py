@@ -16,10 +16,11 @@ def _execute_prompt() -> str:
 
 
 def _package_version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+
     try:
-        from importlib.metadata import version
         return version("quipcli")
-    except Exception:
+    except PackageNotFoundError:
         return "unknown"
 
 
@@ -35,17 +36,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Prompt words (no quoting needed). Files auto-detected by extension.",
     )
     parser.add_argument(
-        "-e", "--execute",
+        "-e",
+        "--execute",
         action="store_true",
         help="Execute mode: generate and run a shell command.",
     )
     parser.add_argument(
-        "-c", "--code",
+        "-c",
+        "--code",
         action="store_true",
         help="Code mode: generate code and print to stdout.",
     )
     parser.add_argument(
-        "-a", "--agent",
+        "-a",
+        "--agent",
         action="store_true",
         help="Agent mode: multi-turn tool-calling loop (shell, file read/write, web search/fetch).",
     )
@@ -62,36 +66,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="With -a/--agent: disable the hosted web search/fetch tools for this call.",
     )
     model_arg = parser.add_argument(
-        "-m", "--model",
+        "-m",
+        "--model",
         default=DEFAULT_MODEL,
         metavar="MODEL",
         help=f"Model to use (default: {DEFAULT_MODEL} or $LLM_CMD_MODEL).",
     )
     parser.add_argument(
-        "-S", "--system",
+        "-S",
+        "--system",
         default=None,
         metavar="PROMPT",
         help="Override the system prompt.",
     )
     parser.add_argument(
-        "-s", "--session",
+        "-s",
+        "--session",
         default=None,
         metavar="SESSION",
         help="Session name or 'auto'. Displayed on stderr for reuse.",
     )
     parser.add_argument(
-        "-f", "--follow-up",
+        "-f",
+        "--follow-up",
         action="store_true",
         help="Continue the last session in history.",
     )
     parser.add_argument(
-        "-i", "--input",
+        "-i",
+        "--input",
         action="append",
         metavar="FILE",
         help="Explicit file input (image/pdf/audio/video). Repeatable.",
     )
     parser.add_argument(
-        "-q", "--quiet",
+        "-q",
+        "--quiet",
         action="store_true",
         help="Suppress post-response usage stats.",
     )
@@ -104,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--update-rankings",
         action="store_true",
         help="Fetch OpenRouter's top-50 daily usage ranking (needs an OpenRouter "
-             "API key), then exit. Usage volume, not a quality score.",
+        "API key), then exit. Usage volume, not a quality score.",
     )
     parser.add_argument(
         "--models",
@@ -112,11 +122,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="List cached models (* marks the current default), then exit.",
     )
     parser.add_argument(
-        "--in", dest="in_filter", default=None, metavar="MODALITIES",
+        "--in",
+        dest="in_filter",
+        default=None,
+        metavar="MODALITIES",
         help="With --models: comma-separated required input modalities (e.g. image,text).",
     )
     parser.add_argument(
-        "--out", dest="out_filter", default=None, metavar="MODALITIES",
+        "--out",
+        dest="out_filter",
+        default=None,
+        metavar="MODALITIES",
         help="With --models: comma-separated required output modalities (e.g. audio).",
     )
     parser.add_argument(
@@ -126,7 +142,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model-set",
-        nargs="?", const="", default=None, metavar="MODEL",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="MODEL",
         help="Set the default model (omit MODEL to pick interactively), then exit.",
     )
     parser.add_argument(
@@ -141,7 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--cost",
-        nargs="?", const="7d", default=None, metavar="PERIOD",
+        nargs="?",
+        const="7d",
+        default=None,
+        metavar="PERIOD",
         help="Show usage cost summary (1d, 7d default, 30d, or all), then exit.",
     )
     parser.add_argument(
@@ -150,15 +172,22 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interactive fzf-based picker for models and config (requires fzf).",
     )
     parser.add_argument(
-        "--_tui-model-info", dest="tui_model_info", default=None, metavar="MODEL_ID",
+        "--_tui-model-info",
+        dest="tui_model_info",
+        default=None,
+        metavar="MODEL_ID",
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        "--_tui-list-models", dest="tui_list_models", action="store_true",
+        "--_tui-list-models",
+        dest="tui_list_models",
+        action="store_true",
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
-        "--_tui-config-lines", dest="tui_config_lines", action="store_true",
+        "--_tui-config-lines",
+        dest="tui_config_lines",
+        action="store_true",
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
