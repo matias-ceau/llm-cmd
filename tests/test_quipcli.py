@@ -69,6 +69,79 @@ def mock_http():
         yield setup
 
 
+# ── _migrate_legacy_data ─────────────────────────────────────────────────────
+
+
+class TestMigrateLegacyData:
+    def _old_dir(self, tmp_path, monkeypatch):
+        old = tmp_path / "old-xdg" / "llm-cmd"
+        old.mkdir(parents=True)
+        for var in ("XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+            monkeypatch.setenv(var, str(tmp_path / "old-xdg"))
+        return old
+
+    def test_copies_legacy_files_to_new_location(self, tmp_path, monkeypatch):
+        old = self._old_dir(tmp_path, monkeypatch)
+        (old / "config.json").write_text('{"default_model": "legacy/model"}')
+        (old / "models.json").write_text('{"data": []}')
+        (old / "history.db").write_text("legacy db bytes")
+        new_dir = tmp_path / "new-xdg"
+        with (
+            patch("quipcli.constants._CONFIG_FILE", new_dir / "config.json"),
+            patch("quipcli.constants._MODELS_CACHE", new_dir / "models.json"),
+            patch("quipcli.constants._HISTORY_DB", new_dir / "history.db"),
+        ):
+            quipcli.constants._migrate_legacy_data()
+            assert (
+                new_dir / "config.json"
+            ).read_text() == '{"default_model": "legacy/model"}'
+            assert (new_dir / "models.json").read_text() == '{"data": []}'
+            assert (new_dir / "history.db").read_text() == "legacy db bytes"
+        # old files untouched, not moved
+        assert (old / "config.json").exists()
+        assert (old / "history.db").exists()
+
+    def test_does_not_overwrite_existing_new_file(self, tmp_path, monkeypatch):
+        old = self._old_dir(tmp_path, monkeypatch)
+        (old / "config.json").write_text('{"default_model": "legacy/model"}')
+        new_dir = tmp_path / "new-xdg"
+        new_dir.mkdir()
+        (new_dir / "config.json").write_text('{"default_model": "current/model"}')
+        with (
+            patch("quipcli.constants._CONFIG_FILE", new_dir / "config.json"),
+            patch("quipcli.constants._MODELS_CACHE", new_dir / "models.json"),
+            patch("quipcli.constants._HISTORY_DB", new_dir / "history.db"),
+        ):
+            quipcli.constants._migrate_legacy_data()
+        assert (
+            new_dir / "config.json"
+        ).read_text() == '{"default_model": "current/model"}'
+
+    def test_copy_failure_is_swallowed(self, tmp_path, monkeypatch):
+        old = self._old_dir(tmp_path, monkeypatch)
+        (old / "config.json").write_text('{"default_model": "legacy/model"}')
+        new_dir = tmp_path / "new-xdg"
+        with (
+            patch("quipcli.constants._CONFIG_FILE", new_dir / "config.json"),
+            patch("quipcli.constants._MODELS_CACHE", new_dir / "models.json"),
+            patch("quipcli.constants._HISTORY_DB", new_dir / "history.db"),
+            patch("shutil.copy2", side_effect=OSError("permission denied")),
+        ):
+            quipcli.constants._migrate_legacy_data()  # must not raise
+
+    def test_no_legacy_dirs_is_a_noop(self, tmp_path, monkeypatch):
+        for var in ("XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+            monkeypatch.setenv(var, str(tmp_path / "no-such-xdg"))
+        new_dir = tmp_path / "new-xdg"
+        with (
+            patch("quipcli.constants._CONFIG_FILE", new_dir / "config.json"),
+            patch("quipcli.constants._MODELS_CACHE", new_dir / "models.json"),
+            patch("quipcli.constants._HISTORY_DB", new_dir / "history.db"),
+        ):
+            quipcli.constants._migrate_legacy_data()  # must not raise
+        assert not new_dir.exists()
+
+
 # ── _strip_fences ─────────────────────────────────────────────────────────────
 
 
@@ -316,6 +389,39 @@ class TestExecutePrompt:
         prompt = _execute_prompt()
         assert "No markdown" in prompt
         assert "No code fences" in prompt
+
+
+class TestPrintStats:
+    def test_none_prints_nothing(self, capsys):
+        quipcli._print_stats(None)
+        assert capsys.readouterr().err == ""
+
+    def test_formats_model_tokens_and_cost(self, capsys):
+        stats = quipcli._UsageStats(
+            model="openai/gpt-4o", prompt_tokens=10, completion_tokens=5, cost_usd=0.002
+        )
+        quipcli._print_stats(stats)
+        err = capsys.readouterr().err
+        assert "openai/gpt-4o" in err
+        assert "15 tok" in err
+        assert "$0.0020" in err
+
+    def test_omits_cost_segment_when_none(self, capsys):
+        stats = quipcli._UsageStats(
+            model="openai/gpt-4o", prompt_tokens=10, completion_tokens=5, cost_usd=None
+        )
+        quipcli._print_stats(stats)
+        err = capsys.readouterr().err
+        assert "$" not in err
+
+    def test_omits_token_segment_when_zero(self, capsys):
+        stats = quipcli._UsageStats(
+            model="openai/gpt-4o", prompt_tokens=0, completion_tokens=0, cost_usd=None
+        )
+        quipcli._print_stats(stats)
+        err = capsys.readouterr().err
+        assert "tok" not in err
+        assert "openai/gpt-4o" in err
 
 
 # ── _mode_prompt ──────────────────────────────────────────────────────────────
@@ -1452,6 +1558,22 @@ class TestAgentLoop:
         assert exc.value.code == 1
         assert "boom" in capsys.readouterr().err
 
+    def test_malformed_json_response_exits(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(200, b"not json{{"))
+        with pytest.raises(SystemExit) as exc:
+            quipcli.run_agent_loop(self._msgs(), "m", render_markdown=False)
+        assert exc.value.code == 1
+        assert "unexpected API response" in capsys.readouterr().err
+
+    def test_final_answer_rendered_as_markdown_when_enabled(self, mock_http, capsys):
+        resp = self._response({"role": "assistant", "content": "**bold** answer"})
+        mock_http(resp)
+        with patch("quipcli.agent._use_markdown_rendering", return_value=True):
+            quipcli.run_agent_loop(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        assert "\x1b[" in out
+        assert "bold" in out
+
 
 class TestMainStatus:
     def test_api_key_masked(self, tmp_path, capsys, monkeypatch):
@@ -1564,6 +1686,33 @@ class TestEditInEditor:
             with patch("quipcli.execute.subprocess.run") as run, patch("os.unlink"):
                 quipcli._edit_in_editor("ls", "test")
         run.assert_called_once_with(["code", "--wait", str(tmpfile)], check=False)
+
+
+class TestEditTextValue:
+    def test_returns_edited_value_stripped(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EDITOR", "true")
+        with patch("tempfile.NamedTemporaryFile") as mock_ntf:
+            tmpfile = tmp_path / "value.txt"
+            tmpfile.write_text("  edited system prompt  \n")
+            mock_ntf.return_value.__enter__ = lambda s: s
+            mock_ntf.return_value.__exit__ = lambda *a: False
+            mock_ntf.return_value.name = str(tmpfile)
+            with patch("quipcli.execute.subprocess.run") as run, patch("os.unlink"):
+                result = quipcli._edit_text_value("original value")
+        run.assert_called_once_with(["true", str(tmpfile)], check=False)
+        assert result == "edited system prompt"
+
+    def test_no_comment_stripping_unlike_edit_in_editor(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("EDITOR", "true")
+        with patch("tempfile.NamedTemporaryFile") as mock_ntf:
+            tmpfile = tmp_path / "value.txt"
+            tmpfile.write_text("# not a comment header, just text\n")
+            mock_ntf.return_value.__enter__ = lambda s: s
+            mock_ntf.return_value.__exit__ = lambda *a: False
+            mock_ntf.return_value.name = str(tmpfile)
+            with patch("quipcli.execute.subprocess.run"), patch("os.unlink"):
+                result = quipcli._edit_text_value("original value")
+        assert result == "# not a comment header, just text"
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -1759,6 +1908,15 @@ class TestHistory:
         ):
             quipcli._record_usage(stats, "chat")  # must not raise
 
+    def test_summary_degrades_on_db_error(self, tmp_path):
+        db = tmp_path / "history.db"
+        db.write_text("")  # must exist so _cost_summary doesn't fast-return first
+        with (
+            patch("quipcli.constants._HISTORY_DB", db),
+            patch("sqlite3.connect", side_effect=sqlite3.OperationalError("db error")),
+        ):
+            assert quipcli._cost_summary(7) == {}
+
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
 
@@ -1788,6 +1946,34 @@ class TestSessions:
 
     def test_last_session_none_when_empty(self, tmp_path):
         with patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"):
+            assert quipcli._last_session_id() is None
+
+    def test_record_message_never_crashes_on_db_error(self, tmp_path):
+        with (
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "history.db"),
+            patch("quipcli.constants._DATA_DIR", tmp_path),
+            patch("sqlite3.connect", side_effect=sqlite3.OperationalError("db error")),
+        ):
+            quipcli._record_message(
+                "sess1", "user", "hi", None, None, "chat"
+            )  # must not raise
+
+    def test_get_session_messages_degrades_on_db_error(self, tmp_path):
+        db = tmp_path / "history.db"
+        db.write_text("")
+        with (
+            patch("quipcli.constants._HISTORY_DB", db),
+            patch("sqlite3.connect", side_effect=sqlite3.OperationalError("db error")),
+        ):
+            assert quipcli._get_session_messages("sess1") == []
+
+    def test_last_session_id_degrades_on_db_error(self, tmp_path):
+        db = tmp_path / "history.db"
+        db.write_text("")
+        with (
+            patch("quipcli.constants._HISTORY_DB", db),
+            patch("sqlite3.connect", side_effect=sqlite3.OperationalError("db error")),
+        ):
             assert quipcli._last_session_id() is None
 
     def test_resolve_session_none(self):
