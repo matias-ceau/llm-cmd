@@ -736,6 +736,36 @@ class TestMakeRequest:
         assert used == "m"
         assert sleep.call_count == 1
 
+    @pytest.mark.parametrize("status", [500, 502, 503, 529])
+    def test_retries_on_other_retriable_statuses_then_succeeds(self, status):
+        failing = MockHTTPResponse(status, b"transient error")
+        ok = MockHTTPResponse(200, b"ok")
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.http_client.time.sleep") as sleep,
+        ):
+            cls.side_effect = [_mock_conn(failing), _mock_conn(ok)]
+            resp, used = quipcli._make_request(self._msgs(), "m", False)
+        assert resp.status == 200
+        assert used == "m"
+        assert sleep.call_count == 1
+
+    def test_retriable_status_exhausts_retries_and_exits(self):
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.http_client.time.sleep") as sleep,
+            patch("quipcli.http_client._ollama_models", return_value=None),
+        ):
+            cls.return_value = _mock_conn(MockHTTPResponse(503, b"still down"))
+            with pytest.raises(SystemExit) as exc:
+                quipcli._make_request(self._msgs(), "m", False)
+        assert exc.value.code == 1
+        assert (
+            sleep.call_count == 3
+        )  # all backoff waits exhausted, no Ollama fallback for API status errors
+
     def test_no_retry_on_client_error(self, capsys):
         with (
             patch("http.client.HTTPSConnection") as cls,
