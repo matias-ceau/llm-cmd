@@ -4,7 +4,13 @@ import sys
 from . import constants
 from .agent import run_agent_loop
 from .cli import _print_stats, build_parser, get_content
-from .config import _ensure_config, _load_config, _resolve_default_model, _save_config, _seed_defaults
+from .config import (
+    _ensure_config,
+    _load_config,
+    _resolve_default_model,
+    _save_config,
+    _seed_defaults,
+)
 from .context import _machine_context
 from .db import _record_message, _record_usage, _resolve_session
 from .execute import confirm_and_run

@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import os
 import sys
 
@@ -177,15 +178,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # Attach completer — substring match so "haiku" finds "anthropic/claude-3-5-haiku"
-    try:
-        import argcomplete
+    if importlib.util.find_spec("argcomplete") is not None:
 
         def _model_completer(prefix, **_):
             return [m for m in _load_models() if not prefix or prefix in m]
 
         model_arg.completer = _model_completer  # type: ignore[attr-defined]
-    except ImportError:
-        pass
 
     return parser
 

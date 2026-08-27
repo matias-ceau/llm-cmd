@@ -10,7 +10,6 @@ import pytest
 
 import quipcli
 from quipcli import (
-    _UsageStats,
     _build_user_content,
     _execute_prompt,
     _is_image_url,
@@ -19,10 +18,10 @@ from quipcli import (
     _models_url,
     _resolve_model_name,
     _strip_fences,
+    _UsageStats,
     build_parser,
     get_content,
 )
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -220,9 +219,8 @@ class TestGetContent:
         args = build_parser().parse_args([])
         stdin = MagicMock()
         stdin.isatty.return_value = True
-        with patch("sys.stdin", stdin):
-            with pytest.raises(SystemExit) as exc:
-                get_content(args)
+        with patch("sys.stdin", stdin), pytest.raises(SystemExit) as exc:
+            get_content(args)
         assert exc.value.code == 1
 
     def test_empty_stdin_exits(self):
@@ -230,9 +228,8 @@ class TestGetContent:
         stdin = MagicMock()
         stdin.isatty.return_value = False
         stdin.read.return_value = "   "
-        with patch("sys.stdin", stdin):
-            with pytest.raises(SystemExit) as exc:
-                get_content(args)
+        with patch("sys.stdin", stdin), pytest.raises(SystemExit) as exc:
+            get_content(args)
         assert exc.value.code == 1
 
     def test_stdin_combined_with_words(self):
@@ -415,9 +412,8 @@ class TestResolveModelName:
         cache = self._cache(tmp_path, [
             "anthropic/claude-3-5-haiku", "anthropic/claude-3-opus", "openai/gpt-4o",
         ])
-        with patch("quipcli.constants._MODELS_CACHE", cache):
-            with pytest.raises(SystemExit) as exc:
-                _resolve_model_name("claude")
+        with patch("quipcli.constants._MODELS_CACHE", cache), pytest.raises(SystemExit) as exc:
+            _resolve_model_name("claude")
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "anthropic/claude-3-5-haiku" in err
@@ -434,9 +430,11 @@ class TestResolveModelName:
 class TestMaybeUpdateModelsBg:
     def test_skips_when_bg_env_set(self, monkeypatch, tmp_path):
         monkeypatch.setenv("_LLM_CMD_BG_UPDATE", "1")
-        with patch("subprocess.Popen") as popen:
-            with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"):
-                _maybe_update_models_bg()
+        with (
+            patch("subprocess.Popen") as popen,
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"),
+        ):
+            _maybe_update_models_bg()
         popen.assert_not_called()
 
     def test_skips_when_cache_fresh(self, monkeypatch, tmp_path):
@@ -444,16 +442,17 @@ class TestMaybeUpdateModelsBg:
         cache = tmp_path / "models.json"
         cache.write_text("{}")
         os.utime(cache, (time.time(), time.time()))
-        with patch("subprocess.Popen") as popen:
-            with patch("quipcli.constants._MODELS_CACHE", cache):
-                _maybe_update_models_bg()
+        with patch("subprocess.Popen") as popen, patch("quipcli.constants._MODELS_CACHE", cache):
+            _maybe_update_models_bg()
         popen.assert_not_called()
 
     def test_spawns_when_cache_missing(self, monkeypatch, tmp_path):
         monkeypatch.delenv("_LLM_CMD_BG_UPDATE", raising=False)
-        with patch("subprocess.Popen") as popen:
-            with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"):
-                _maybe_update_models_bg()
+        with (
+            patch("subprocess.Popen") as popen,
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"),
+        ):
+            _maybe_update_models_bg()
         popen.assert_called_once()
 
     def test_spawns_when_cache_stale(self, monkeypatch, tmp_path):
@@ -462,16 +461,17 @@ class TestMaybeUpdateModelsBg:
         cache.write_text("{}")
         old = time.time() - (quipcli._CACHE_TTL + 1)
         os.utime(cache, (old, old))
-        with patch("subprocess.Popen") as popen:
-            with patch("quipcli.constants._MODELS_CACHE", cache):
-                _maybe_update_models_bg()
+        with patch("subprocess.Popen") as popen, patch("quipcli.constants._MODELS_CACHE", cache):
+            _maybe_update_models_bg()
         popen.assert_called_once()
 
     def test_spawned_process_is_detached(self, monkeypatch, tmp_path):
         monkeypatch.delenv("_LLM_CMD_BG_UPDATE", raising=False)
-        with patch("subprocess.Popen") as popen:
-            with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"):
-                _maybe_update_models_bg()
+        with (
+            patch("subprocess.Popen") as popen,
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"),
+        ):
+            _maybe_update_models_bg()
         _, kwargs = popen.call_args
         assert kwargs.get("start_new_session") is True
         assert kwargs.get("stdout") == subprocess.DEVNULL
@@ -553,20 +553,23 @@ class TestMakeRequest:
         return msgs
 
     def test_no_api_key_no_ollama_exits(self):
-        with patch("quipcli.constants._API_KEY", ""), \
-             patch("quipcli.http_client._ollama_models", return_value=None):
-            with pytest.raises(SystemExit) as exc:
-                quipcli._make_request(self._msgs(), "m", False)
+        with (
+            patch("quipcli.constants._API_KEY", ""),
+            patch("quipcli.http_client._ollama_models", return_value=None),
+            pytest.raises(SystemExit) as exc,
+        ):
+            quipcli._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
 
     def test_connection_error_no_ollama_exits(self):
-        with patch("http.client.HTTPSConnection") as cls, \
-             patch("quipcli.http_client.time.sleep") as sleep, \
-             patch("quipcli.http_client._ollama_models", return_value=None):
+        with (
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.http_client.time.sleep") as sleep,
+            patch("quipcli.http_client._ollama_models", return_value=None),
+        ):
             cls.return_value.request.side_effect = OSError("connection refused")
-            with patch("quipcli.constants._API_KEY", "key"):
-                with pytest.raises(SystemExit) as exc:
-                    quipcli._make_request(self._msgs(), "m", False)
+            with patch("quipcli.constants._API_KEY", "key"), pytest.raises(SystemExit) as exc:
+                quipcli._make_request(self._msgs(), "m", False)
         assert exc.value.code == 1
         assert sleep.call_count == 3  # all backoff waits exhausted
 
@@ -711,7 +714,7 @@ class TestCallLlmStreaming:
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        text, _ = quipcli.call_llm_streaming(self._msgs(), "m")
+        _text, _stats = quipcli.call_llm_streaming(self._msgs(), "m")
         assert "ok" in capsys.readouterr().out
 
     def test_stops_at_done(self, mock_http, capsys):
@@ -730,7 +733,7 @@ class TestCallLlmStreaming:
             b"data: [DONE]\n",
         ]
         mock_http(MockHTTPResponse(200, b"", lines))
-        text, stats = quipcli.call_llm_streaming(self._msgs(), "m", collect_usage=True)
+        _text, stats = quipcli.call_llm_streaming(self._msgs(), "m", collect_usage=True)
         assert stats is not None
         assert stats.prompt_tokens == 5
         assert stats.completion_tokens == 8
@@ -1000,9 +1003,8 @@ class TestToolsModule:
         assert result == "output"
 
     def test_run_shell_declined_does_not_run(self):
-        with patch("quipcli.tools.subprocess.run") as run:
-            with patch("builtins.input", return_value="n"):
-                result = quipcli.run_shell({"command": "rm -rf /"})
+        with patch("quipcli.tools.subprocess.run") as run, patch("builtins.input", return_value="n"):
+            result = quipcli.run_shell({"command": "rm -rf /"})
         run.assert_not_called()
         assert "declined" in result
 
@@ -1016,9 +1018,11 @@ class TestToolsModule:
         assert "exit code 0" in result
 
     def test_run_shell_timeout(self):
-        with patch("quipcli.tools.subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 120)):
-            with patch("builtins.input", return_value="y"):
-                result = quipcli.run_shell({"command": "sleep 999"})
+        with (
+            patch("quipcli.tools.subprocess.run", side_effect=subprocess.TimeoutExpired("cmd", 120)),
+            patch("builtins.input", return_value="y"),
+        ):
+            result = quipcli.run_shell({"command": "sleep 999"})
         assert "timed out" in result
 
 
@@ -1045,6 +1049,7 @@ class TestAgentLoop:
             text, stats = quipcli.run_agent_loop(self._msgs(), "m", render_markdown=False)
         assert text == "here is the answer"
         assert "here is the answer" in capsys.readouterr().out
+        assert stats is not None
         assert stats.prompt_tokens == 5
         assert stats.completion_tokens == 3
 
@@ -1077,6 +1082,7 @@ class TestAgentLoop:
         tool_msgs = [m for m in messages if m.get("role") == "tool"]
         assert tool_msgs == [{"role": "tool", "tool_call_id": "call_1", "content": "hello"}]
         # usage accumulated across both steps
+        assert stats is not None
         assert stats.prompt_tokens == 30
         assert stats.completion_tokens == 13
         assert stats.cost_usd == pytest.approx(0.003)
@@ -1108,7 +1114,7 @@ class TestAgentLoop:
              patch("quipcli.constants._API_KEY", "key"), \
              patch("quipcli.agent.execute_tool_call", return_value="ok"):
             cls.return_value = _mock_conn(looping_resp)
-            text, stats = quipcli.run_agent_loop(self._msgs(), "m", max_steps=3, render_markdown=False)
+            _text, stats = quipcli.run_agent_loop(self._msgs(), "m", max_steps=3, render_markdown=False)
         assert cls.call_count == 3
         assert "max steps" in capsys.readouterr().err
         assert stats is not None
@@ -1150,39 +1156,34 @@ class TestConfirmAndRun:
     def test_y_runs_command(self):
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
-            with patch("builtins.input", return_value="y"):
-                with pytest.raises(SystemExit) as exc:
-                    quipcli.confirm_and_run("ls -la", "list files")
+            with patch("builtins.input", return_value="y"), pytest.raises(SystemExit) as exc:
+                quipcli.confirm_and_run("ls -la", "list files")
         assert exc.value.code == 0
         run.assert_called_once_with("ls -la", shell=True)
 
     def test_empty_enter_runs_command(self):
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
-            with patch("builtins.input", return_value=""):
-                with pytest.raises(SystemExit) as exc:
-                    quipcli.confirm_and_run("ls", "list")
+            with patch("builtins.input", return_value=""), pytest.raises(SystemExit) as exc:
+                quipcli.confirm_and_run("ls", "list")
         assert exc.value.code == 0
         run.assert_called_once()
 
     def test_n_aborts(self):
-        with patch("builtins.input", return_value="n"):
-            with pytest.raises(SystemExit) as exc:
-                quipcli.confirm_and_run("ls", "list")
+        with patch("builtins.input", return_value="n"), pytest.raises(SystemExit) as exc:
+            quipcli.confirm_and_run("ls", "list")
         assert exc.value.code == 0
 
     def test_ctrl_c_aborts(self):
-        with patch("builtins.input", side_effect=KeyboardInterrupt):
-            with pytest.raises(SystemExit) as exc:
-                quipcli.confirm_and_run("ls", "list")
+        with patch("builtins.input", side_effect=KeyboardInterrupt), pytest.raises(SystemExit) as exc:
+            quipcli.confirm_and_run("ls", "list")
         assert exc.value.code == 0
 
     def test_fences_stripped_before_run(self):
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
-            with patch("builtins.input", return_value="y"):
-                with pytest.raises(SystemExit):
-                    quipcli.confirm_and_run("```bash\nls -la\n```", "list")
+            with patch("builtins.input", return_value="y"), pytest.raises(SystemExit):
+                quipcli.confirm_and_run("```bash\nls -la\n```", "list")
         run.assert_called_once_with("ls -la", shell=True)
 
     def test_e_opens_editor_then_reruns(self):
@@ -1190,10 +1191,12 @@ class TestConfirmAndRun:
         responses = iter(["e", "y"])
         with patch("subprocess.run") as run:
             run.return_value.returncode = 0
-            with patch("builtins.input", side_effect=responses):
-                with patch("quipcli.execute._edit_in_editor", return_value=edited_cmd):
-                    with pytest.raises(SystemExit):
-                        quipcli.confirm_and_run("ls -la", "list files")
+            with (
+                patch("builtins.input", side_effect=responses),
+                patch("quipcli.execute._edit_in_editor", return_value=edited_cmd),
+                pytest.raises(SystemExit),
+            ):
+                quipcli.confirm_and_run("ls -la", "list files")
         run.assert_called_once_with(edited_cmd, shell=True)
 
 
@@ -1208,9 +1211,8 @@ class TestEditInEditor:
             mock_ntf.return_value.__enter__ = lambda s: s
             mock_ntf.return_value.__exit__ = lambda *a: False
             mock_ntf.return_value.name = str(tmpfile)
-            with patch("quipcli.execute.subprocess.run") as run:
-                with patch("os.unlink"):
-                    result = quipcli._edit_in_editor("ls -la", "test")
+            with patch("quipcli.execute.subprocess.run") as run, patch("os.unlink"):
+                result = quipcli._edit_in_editor("ls -la", "test")
         run.assert_called_once_with(["true", str(tmpfile)])
         assert "#" not in result
         assert "ls -la" in result
@@ -1223,9 +1225,8 @@ class TestEditInEditor:
             mock_ntf.return_value.__enter__ = lambda s: s
             mock_ntf.return_value.__exit__ = lambda *a: False
             mock_ntf.return_value.name = str(tmpfile)
-            with patch("quipcli.execute.subprocess.run") as run:
-                with patch("os.unlink"):
-                    quipcli._edit_in_editor("ls", "test")
+            with patch("quipcli.execute.subprocess.run") as run, patch("os.unlink"):
+                quipcli._edit_in_editor("ls", "test")
         run.assert_called_once_with(["code", "--wait", str(tmpfile)])
 
 
@@ -1451,9 +1452,8 @@ class TestSessions:
         assert len(msgs) == 2
 
     def test_resolve_follow_up_no_history_exits(self, tmp_path):
-        with patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"):
-            with pytest.raises(SystemExit):
-                quipcli._resolve_session(None, follow_up=True)
+        with patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"), pytest.raises(SystemExit):
+            quipcli._resolve_session(None, follow_up=True)
 
     def test_session_and_followup_mutually_exclusive(self):
         with pytest.raises(SystemExit):
@@ -1545,14 +1545,14 @@ class TestBuildUserContent:
         assert mods == set()
 
     def test_text_only_returns_str(self):
-        content, mods = _build_user_content(["hello", "world"])
+        content, _mods = _build_user_content(["hello", "world"])
         assert isinstance(content, str)
         assert content == "hello world"
 
     def test_only_image_no_text(self, tmp_path):
         img = tmp_path / "photo.png"
         img.write_bytes(b"\x89PNG\r\n")
-        content, mods = _build_user_content([str(img)])
+        content, _mods = _build_user_content([str(img)])
         assert isinstance(content, list)
         # No text part when only a file
         text_parts = [p for p in content if p.get("type") == "text"]
@@ -1606,9 +1606,8 @@ class TestModalitySupport:
         cache = self._make_cache(tmp_path, [
             {"id": "m", "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]}}
         ])
-        with patch("quipcli.constants._MODELS_CACHE", cache):
-            with pytest.raises(SystemExit) as exc:
-                quipcli._check_modality_support("m", {"image"})
+        with patch("quipcli.constants._MODELS_CACHE", cache), pytest.raises(SystemExit) as exc:
+            quipcli._check_modality_support("m", {"image"})
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "image" in err
@@ -1701,21 +1700,25 @@ class TestModelConfigFlags:
         assert json.loads(cfg_file.read_text())["default_model"] == "anthropic/claude-3-5-haiku"
 
     def test_set_interactive_no_cache_errors_without_fzf(self, tmp_path):
-        with patch("quipcli.constants._CONFIG_FILE", tmp_path / "config.json"), \
-             patch("quipcli.constants._MODELS_CACHE", tmp_path / "models.json"), \
-             patch("shutil.which", return_value=None):
-            with pytest.raises(SystemExit) as exc:
-                quipcli._do_model_set("")
+        with (
+            patch("quipcli.constants._CONFIG_FILE", tmp_path / "config.json"),
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "models.json"),
+            patch("shutil.which", return_value=None),
+            pytest.raises(SystemExit) as exc,
+        ):
+            quipcli._do_model_set("")
         assert exc.value.code == 1
 
     def test_set_interactive_aborted_on_eof_without_fzf(self, tmp_path):
         cache = self._cache(tmp_path, ["openai/gpt-4o"])
-        with patch("quipcli.constants._CONFIG_FILE", tmp_path / "config.json"), \
-             patch("quipcli.constants._MODELS_CACHE", cache), \
-             patch("shutil.which", return_value=None), \
-             patch("builtins.input", side_effect=EOFError):
-            with pytest.raises(SystemExit) as exc:
-                quipcli._do_model_set("")
+        with (
+            patch("quipcli.constants._CONFIG_FILE", tmp_path / "config.json"),
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("shutil.which", return_value=None),
+            patch("builtins.input", side_effect=EOFError),
+            pytest.raises(SystemExit) as exc,
+        ):
+            quipcli._do_model_set("")
         assert exc.value.code == 0
 
     def test_models_marks_current_default(self, tmp_path, capsys):
@@ -1730,9 +1733,8 @@ class TestModelConfigFlags:
         assert "openai/gpt-4o" in out
 
     def test_models_no_cache_errors(self, tmp_path):
-        with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"):
-            with pytest.raises(SystemExit) as exc:
-                quipcli._do_models(None, None)
+        with patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"), pytest.raises(SystemExit) as exc:
+            quipcli._do_models(None, None)
         assert exc.value.code == 1
 
     def test_model_get_prints_source(self, tmp_path, capsys):
@@ -1999,9 +2001,8 @@ class TestConfigView:
 
 class TestRunTui:
     def test_missing_fzf_exits_with_error(self, capsys):
-        with patch("quipcli.tui._fzf_available", return_value=False):
-            with pytest.raises(SystemExit) as exc:
-                quipcli.run_tui()
+        with patch("quipcli.tui._fzf_available", return_value=False), pytest.raises(SystemExit) as exc:
+            quipcli.run_tui()
         assert exc.value.code == 1
         assert "requires fzf" in capsys.readouterr().err
 

@@ -49,8 +49,10 @@ def _maybe_update_models_bg() -> None:
     subprocess.Popen(
         [
             sys.executable, "-c",
-            f"import sys; sys.path.insert(0, {pkg_parent!r});"
-            f"from quipcli.models import _fetch_models; _fetch_models()",
+            (
+                f"import sys; sys.path.insert(0, {pkg_parent!r});"
+                f"from quipcli.models import _fetch_models; _fetch_models()"
+            ),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

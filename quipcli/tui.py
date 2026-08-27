@@ -135,7 +135,7 @@ def _print_model_info(line: str) -> None:
         pricing = m.get("pricing") or {}
         arch = m.get("architecture") or {}
 
-        def _per_million(key: str) -> str:
+        def _per_million(key: str, pricing: dict = pricing) -> str:
             try:
                 return f"${float(pricing[key]) * 1_000_000:.2f}"
             except (KeyError, TypeError, ValueError):
