@@ -34,15 +34,15 @@ Then `qp -m <Tab>` completes model names. Substring match: typing `haiku` finds 
 ## Usage
 
 ```
-qp [-e] [-c] [-a] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
+qp [-e|-c|-a] [-m MODEL] [-S SYSTEM] [-s SESSION|-f] [-i FILE] [-q] [words ...]
 ```
 
 | Flag | Description |
 |------|-------------|
 | *(none)* | Ask a question, stream the answer |
-| `-e` | Generate a shell command, confirm `[Y/n/e]`, run it |
-| `-c` | Generate code, print to stdout |
-| `-a` | Agent mode: multi-turn tool-calling loop — see below |
+| `-e` | Generate a shell command, confirm `[Y/n/e]`, run it. Mutually exclusive with `-c`/`-a` |
+| `-c` | Generate code, print to stdout. Mutually exclusive with `-e`/`-a` |
+| `-a` | Agent mode: multi-turn tool-calling loop — see below. Mutually exclusive with `-e`/`-c` |
 | `--max-steps N` | With `-a`: max tool-calling loop iterations (default: 12) |
 | `--no-web` | With `-a`: disable the hosted web search/fetch tools for this call |
 | `-m MODEL` | Override model (default: `openai/gpt-4o-mini`). MODEL may be a substring matching a single cached model, e.g. `-m haiku` |

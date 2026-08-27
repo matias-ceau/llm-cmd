@@ -131,6 +131,15 @@ class TestParser:
     def test_agent_flag(self):
         assert build_parser().parse_args(["-a", "do it"]).agent is True
 
+    @pytest.mark.parametrize(
+        "combo", [["-e", "-c"], ["-e", "-a"], ["-c", "-a"], ["-e", "-c", "-a"]]
+    )
+    def test_mode_flags_are_mutually_exclusive(self, combo, capsys):
+        with pytest.raises(SystemExit) as exc:
+            build_parser().parse_args([*combo, "do it"])
+        assert exc.value.code == 2
+        assert "not allowed with" in capsys.readouterr().err
+
     def test_max_steps_default(self):
         assert build_parser().parse_args(["hi"]).max_steps == 12
 

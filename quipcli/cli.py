@@ -35,19 +35,20 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="*",
         help="Prompt words (no quoting needed). Files auto-detected by extension.",
     )
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "-e",
         "--execute",
         action="store_true",
         help="Execute mode: generate and run a shell command.",
     )
-    parser.add_argument(
+    mode_group.add_argument(
         "-c",
         "--code",
         action="store_true",
         help="Code mode: generate code and print to stdout.",
     )
-    parser.add_argument(
+    mode_group.add_argument(
         "-a",
         "--agent",
         action="store_true",
