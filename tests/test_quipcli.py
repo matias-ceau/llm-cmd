@@ -3,6 +3,7 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -2058,6 +2059,66 @@ class TestModelConfigFlags:
     def test_cost_no_history(self, tmp_path, capsys):
         with patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"):
             quipcli._do_cost("7d")
+        assert "No history" in capsys.readouterr().out
+
+
+# ── main() argv guards ───────────────────────────────────────────────────────
+
+
+class TestMainArgvGuards:
+    """--model-set/--cost use nargs='?', so argparse greedily consumes a bare
+    following word as their value even when it was meant to start a chat
+    prompt. main() must refuse to proceed rather than silently corrupting
+    config or running --cost with a bogus period (see input-paths audit H1)."""
+
+    def _isolate_config(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(quipcli.constants, "_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(quipcli.constants, "_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(
+            quipcli.constants, "_MODELS_CACHE", tmp_path / "models.json"
+        )
+        monkeypatch.setattr(quipcli.constants, "_HISTORY_DB", tmp_path / "history.db")
+
+    def test_model_set_with_leftover_words_errors_without_touching_config(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._isolate_config(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            sys, "argv", ["qp", "--model-set", "list", "all", "my", "files"]
+        )
+        with patch("subprocess.Popen"), pytest.raises(SystemExit) as exc:
+            quipcli.main()
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "--model-set" in err
+        assert "'list'" in err
+        cfg = json.loads((tmp_path / "config.json").read_text())
+        assert "default_model" not in cfg
+
+    def test_cost_with_leftover_words_errors(self, tmp_path, monkeypatch, capsys):
+        self._isolate_config(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["qp", "--cost", "what", "is", "going", "on"])
+        with patch("subprocess.Popen"), pytest.raises(SystemExit) as exc:
+            quipcli.main()
+        assert exc.value.code == 1
+        assert "--cost" in capsys.readouterr().err
+
+    def test_model_set_alone_is_unaffected(self, tmp_path, monkeypatch):
+        self._isolate_config(tmp_path, monkeypatch)
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{"id": "openai/gpt-4o"}]}))
+        monkeypatch.setattr(quipcli.constants, "_MODELS_CACHE", cache)
+        monkeypatch.setattr(sys, "argv", ["qp", "--model-set", "openai/gpt-4o"])
+        with patch("subprocess.Popen"):
+            quipcli.main()
+        cfg = json.loads((tmp_path / "config.json").read_text())
+        assert cfg["default_model"] == "openai/gpt-4o"
+
+    def test_cost_alone_is_unaffected(self, tmp_path, monkeypatch, capsys):
+        self._isolate_config(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["qp", "--cost", "30d"])
+        with patch("subprocess.Popen"):
+            quipcli.main()
         assert "No history" in capsys.readouterr().out
 
 

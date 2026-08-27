@@ -204,6 +204,21 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    # --model-set/--cost use nargs="?", so argparse greedily consumes the next
+    # bare word as their value even when it was meant to start a prompt (e.g.
+    # `qp --model-set list all my files`). Both flags always exit without
+    # touching `words`, so leftover words alongside a consumed value can only
+    # mean this ambiguity was hit, not a real intent to combine the two.
+    for flag, value in (("--model-set", args.model_set), ("--cost", args.cost)):
+        if value is not None and args.words:
+            print(
+                f"Error: {flag} greedily took {value!r} as its value, leaving "
+                f"unrelated words: {' '.join(args.words)!r}. "
+                f"Use {flag}={value!r} to be explicit, or run {flag} on its own.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # Hidden flags used internally by --tui's fzf preview/reload — must stay
     # fast (cache-only, no network) since fzf calls them on every keystroke.
     if args.tui_model_info is not None:
