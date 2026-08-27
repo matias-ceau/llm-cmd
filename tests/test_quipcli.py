@@ -2219,6 +2219,151 @@ class TestMainArgvGuards:
         assert "m" in capsys.readouterr().out
 
 
+class TestMainDispatch:
+    """main()'s per-mode dispatch (chat/-e/-a/-c) end-to-end — the argv ->
+    mode -> call_llm_*/run_agent_loop -> stats/history wiring had zero direct
+    test coverage; only its individual helpers were unit-tested in isolation."""
+
+    def _isolate(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(quipcli.constants, "_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(quipcli.constants, "_CONFIG_FILE", tmp_path / "config.json")
+        monkeypatch.setattr(
+            quipcli.constants, "_MODELS_CACHE", tmp_path / "models.json"
+        )
+        monkeypatch.setattr(quipcli.constants, "_HISTORY_DB", tmp_path / "history.db")
+        monkeypatch.setattr(quipcli.constants, "_DATA_DIR", tmp_path)
+
+    def _sse(self, text, usage=None):
+        chunk = json.dumps({"choices": [{"delta": {"content": text}}]}).encode()
+        lines = [b"data: " + chunk + b"\n"]
+        if usage is not None:
+            lines.append(
+                b"data: " + json.dumps({"choices": [], "usage": usage}).encode() + b"\n"
+            )
+        lines.append(b"data: [DONE]\n")
+        return MockHTTPResponse(200, b"", lines)
+
+    def _json(self, message, usage=None):
+        body = {"choices": [{"message": message}]}
+        if usage is not None:
+            body["usage"] = usage
+        return MockHTTPResponse(200, json.dumps(body).encode())
+
+    def test_chat_default_mode_streams_and_records(self, tmp_path, monkeypatch, capsys):
+        self._isolate(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["qp", "hello"])
+        resp = self._sse("hi there", usage={"prompt_tokens": 3, "completion_tokens": 2})
+        with (
+            patch("subprocess.Popen"),
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.entry._record_usage") as record_usage,
+            patch("quipcli.entry._record_message") as record_message,
+        ):
+            cls.return_value = _mock_conn(resp)
+            quipcli.main()
+        assert "hi there" in capsys.readouterr().out
+        record_usage.assert_called_once()
+        assert record_usage.call_args[0][1] == "chat"
+        record_message.assert_not_called()  # no -s/-f, so no session_id
+
+    def test_execute_mode_calls_capture_and_confirm(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._isolate(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["qp", "-e", "list files"])
+        resp = self._json(
+            {"role": "assistant", "content": "ls -la"},
+            usage={"prompt_tokens": 4, "completion_tokens": 3},
+        )
+        with (
+            patch("subprocess.Popen"),
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.entry._record_usage") as record_usage,
+            patch("builtins.input", return_value="n"),
+        ):
+            cls.return_value = _mock_conn(resp)
+            with pytest.raises(SystemExit) as exc:
+                quipcli.main()
+        assert exc.value.code == 0  # user declined to run the generated command
+        record_usage.assert_called_once()
+        assert record_usage.call_args[0][1] == "execute"
+
+    def test_agent_mode_calls_run_agent_loop_and_records(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._isolate(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["qp", "-a", "do it"])
+        resp = self._json(
+            {"role": "assistant", "content": "done"},
+            usage={"prompt_tokens": 5, "completion_tokens": 1},
+        )
+        with (
+            patch("subprocess.Popen"),
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.entry._record_usage") as record_usage,
+        ):
+            cls.return_value = _mock_conn(resp)
+            quipcli.main()
+        assert "done" in capsys.readouterr().out
+        record_usage.assert_called_once()
+        assert record_usage.call_args[0][1] == "agent"
+
+    def test_code_mode_streams_and_records(self, tmp_path, monkeypatch, capsys):
+        self._isolate(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["qp", "-c", "write a sort"])
+        resp = self._sse(
+            "def sort(): ...", usage={"prompt_tokens": 6, "completion_tokens": 4}
+        )
+        with (
+            patch("subprocess.Popen"),
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+            patch("quipcli.entry._record_usage") as record_usage,
+        ):
+            cls.return_value = _mock_conn(resp)
+            quipcli.main()
+        assert "def sort()" in capsys.readouterr().out
+        record_usage.assert_called_once()
+        assert record_usage.call_args[0][1] == "code"
+
+    def test_model_substring_resolved_notice_printed(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._isolate(tmp_path, monkeypatch)
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{"id": "anthropic/claude-3-5-haiku"}]}))
+        monkeypatch.setattr(quipcli.constants, "_MODELS_CACHE", cache)
+        monkeypatch.setattr(sys, "argv", ["qp", "-m", "haiku", "hi"])
+        with (
+            patch("subprocess.Popen"),
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+        ):
+            cls.return_value = _mock_conn(self._sse("ok"))
+            quipcli.main()
+        assert "anthropic/claude-3-5-haiku" in capsys.readouterr().err
+
+    def test_quiet_suppresses_model_resolved_notice(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        self._isolate(tmp_path, monkeypatch)
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"data": [{"id": "anthropic/claude-3-5-haiku"}]}))
+        monkeypatch.setattr(quipcli.constants, "_MODELS_CACHE", cache)
+        monkeypatch.setattr(sys, "argv", ["qp", "-m", "haiku", "-q", "hi"])
+        with (
+            patch("subprocess.Popen"),
+            patch("http.client.HTTPSConnection") as cls,
+            patch("quipcli.constants._API_KEY", "key"),
+        ):
+            cls.return_value = _mock_conn(self._sse("ok"))
+            quipcli.main()
+        assert "Model:" not in capsys.readouterr().err
+
+
 # ── tui ───────────────────────────────────────────────────────────────────────
 
 
