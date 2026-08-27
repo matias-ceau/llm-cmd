@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_MODEL,
     _ensure_config,
     _load_config,
+    _model_source,
     _resolve_default_model,
     _save_config,
     _seed_defaults,

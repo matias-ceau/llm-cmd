@@ -7,6 +7,7 @@ from .cli import _print_stats, build_parser, get_content
 from .config import (
     _ensure_config,
     _load_config,
+    _model_source,
     _resolve_default_model,
     _save_config,
     _seed_defaults,
@@ -68,15 +69,9 @@ def _do_models(in_filter: str | None, out_filter: str | None) -> None:
 
 
 def _do_model_get() -> None:
-    cfg = _load_config()
-    source = (
-        "config"
-        if cfg.get("default_model")
-        else ("env" if os.environ.get("LLM_CMD_MODEL") else "default")
-    )
     model = _resolve_default_model()
     name = f"\033[1m{model}\033[0m" if _color_enabled() else model
-    print(f"{name}  ({source})")
+    print(f"{name}  ({_model_source()})")
 
 
 def _do_model_set(model: str) -> None:
@@ -131,13 +126,8 @@ def _do_config_edit() -> None:
 def _do_status() -> None:
     cfg = _load_config()
     model = _resolve_default_model()
-    model_source = (
-        "config"
-        if cfg.get("default_model")
-        else ("env" if os.environ.get("LLM_CMD_MODEL") else "default")
-    )
     n_models = len(_load_models())
-    print(f"model         : {model}  ({model_source})")
+    print(f"model         : {model}  ({_model_source()})")
     print(f"api_url       : {constants._API_URL}")
     key = constants._API_KEY
     if not key:

@@ -2050,6 +2050,37 @@ class TestModelConfigFlags:
         assert "openai/gpt-4o" in out
         assert "config" in out
 
+    def test_model_get_prefers_env_label_when_both_set(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        # Regression: source label must match the value actually printed —
+        # _resolve_default_model() checks env before config, so when both are
+        # set the env value wins and must be labeled "(env)", not "(config)".
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "openai/gpt-4o"}))
+        monkeypatch.setenv("LLM_CMD_MODEL", "anthropic/claude-3-5-haiku")
+        with patch("quipcli.constants._CONFIG_FILE", cfg_file):
+            quipcli._do_model_get()
+        out = capsys.readouterr().out
+        assert "anthropic/claude-3-5-haiku" in out
+        assert "openai/gpt-4o" not in out
+        assert "(env)" in out
+
+    def test_status_prefers_env_label_when_both_set(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text(json.dumps({"default_model": "openai/gpt-4o"}))
+        monkeypatch.setenv("LLM_CMD_MODEL", "anthropic/claude-3-5-haiku")
+        with (
+            patch("quipcli.constants._CONFIG_FILE", cfg_file),
+            patch("quipcli.constants._MODELS_CACHE", tmp_path / "missing.json"),
+            patch("quipcli.constants._HISTORY_DB", tmp_path / "missing.db"),
+        ):
+            quipcli._do_status()
+        out = capsys.readouterr().out
+        assert "anthropic/claude-3-5-haiku  (env)" in out
+
     def test_config_edit_opens_editor(self, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.json"
         monkeypatch.setenv("EDITOR", "myeditor")
