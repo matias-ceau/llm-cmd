@@ -1009,6 +1009,84 @@ class TestCallLlmStreaming:
         assert plain == content + "\n"
         assert "\x1b[38;5;215m" not in out
 
+    def test_markdown_rendering_across_small_unterminated_chunks_matches_single_chunk(
+        self, mock_http, capsys
+    ):
+        # Real streaming sends many small token deltas with no trailing
+        # newline — exercises the carry-buffer branch in render(), unlike
+        # every other markdown test above which feeds one full,
+        # newline-terminated chunk.
+        parts = ["Use `co", "de` and **bo", "ld** here\n"]
+        lines = [
+            f"data: {json.dumps({'choices': [{'delta': {'content': p}}]})}\n".encode()
+            for p in parts
+        ]
+        lines.append(b"data: [DONE]\n")
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("quipcli.http_client._use_markdown_rendering", return_value=True):
+            quipcli.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        split_out = capsys.readouterr().out
+
+        whole_lines = [
+            f"data: {json.dumps({'choices': [{'delta': {'content': ''.join(parts)}}]})}\n".encode(),
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", whole_lines))
+        with patch("quipcli.http_client._use_markdown_rendering", return_value=True):
+            quipcli.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        whole_out = capsys.readouterr().out
+
+        assert split_out == whole_out
+
+    def test_stream_ending_mid_bold_still_resets_terminal(self, mock_http, capsys):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"**unclosed bold"}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        mock_http(MockHTTPResponse(200, b"", lines))
+        with patch("quipcli.http_client._use_markdown_rendering", return_value=True):
+            quipcli.call_llm_streaming(self._msgs(), "m", render_markdown=True)
+        out = capsys.readouterr().out
+        assert out.endswith("\x1b[0m\n")
+
+
+class TestMarkdownAnsiRenderer:
+    """Direct unit tests for the carry-buffer branches in render()/finish()
+    that the streaming tests above only exercise indirectly."""
+
+    def _renderer(self):
+        return quipcli.http_client._MarkdownAnsiRenderer()
+
+    def test_render_buffers_when_no_newline_yet(self):
+        r = self._renderer()
+        assert r.render("no newline here") == ""
+        assert r._carry == "no newline here"
+
+    def test_render_flushes_up_to_last_newline_and_keeps_remainder(self):
+        r = self._renderer()
+        out = r.render("first line\nsecond ")
+        assert out == "first line\n"
+        assert r._carry == "second "
+
+    def test_finish_with_clean_trailing_state_has_no_reset(self):
+        r = self._renderer()
+        r.render("plain text\n")
+        assert r.finish() == ""
+
+    def test_finish_flushes_unterminated_bold_and_resets(self):
+        r = self._renderer()
+        r.render("**bold text without a closing marker")
+        tail = r.finish()
+        assert tail.endswith(r._RESET)
+        assert r._in_bold is False
+
+    def test_finish_flushes_unterminated_fenced_code_and_resets(self):
+        r = self._renderer()
+        r.render("```python\ncode with no closing fence")
+        tail = r.finish()
+        assert tail.endswith(r._RESET)
+        assert r._in_fenced_code is False
+
 
 class TestCallLlmCapture:
     def _msgs(self):
