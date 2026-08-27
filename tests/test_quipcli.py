@@ -536,6 +536,41 @@ class TestMaybeUpdateModelsBg:
         assert "_LLM_CMD_BG_UPDATE" in kwargs.get("env", {})
 
 
+# ── _fetch_models ────────────────────────────────────────────────────────────
+
+
+class TestFetchModels:
+    def test_success_caches_and_returns_sorted_ids(self, tmp_path, mock_http):
+        body = json.dumps(
+            {"data": [{"id": "openai/gpt-4o"}, {"id": "anthropic/claude-3-5-haiku"}]}
+        ).encode()
+        mock_http(MockHTTPResponse(200, body))
+        cache = tmp_path / "models.json"
+        with (
+            patch("quipcli.constants._MODELS_CACHE", cache),
+            patch("quipcli.constants._CACHE_DIR", tmp_path),
+        ):
+            ids = quipcli._fetch_models()
+        assert ids == ["anthropic/claude-3-5-haiku", "openai/gpt-4o"]
+        assert json.loads(cache.read_text())["data"][0]["id"] == "openai/gpt-4o"
+
+    def test_connection_error_returns_empty(self, capsys):
+        with patch("http.client.HTTPSConnection") as cls:
+            cls.return_value.request.side_effect = OSError("connection refused")
+            assert quipcli._fetch_models() == []
+        assert "connection failed" in capsys.readouterr().err
+
+    def test_non_200_returns_empty(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(500, b"server error"))
+        assert quipcli._fetch_models() == []
+        assert "HTTP 500" in capsys.readouterr().err
+
+    def test_invalid_json_returns_empty(self, mock_http, capsys):
+        mock_http(MockHTTPResponse(200, b"not json{{"))
+        assert quipcli._fetch_models() == []
+        assert "invalid JSON" in capsys.readouterr().err
+
+
 # ── _fetch_rankings / _load_rankings / _ranking_for ─────────────────────────────
 
 
