@@ -1447,6 +1447,19 @@ class TestConfig:
         with patch("quipcli.constants._CONFIG_FILE", cfg_file):
             assert quipcli._load_config() == {}
 
+    def test_load_corrupted_warns_once(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setattr("quipcli.config._warned_bad_config", False)
+        cfg_file = tmp_path / "config.json"
+        cfg_file.write_text("not json{{")
+        with patch("quipcli.constants._CONFIG_FILE", cfg_file):
+            quipcli._load_config()
+            quipcli._load_config()
+            quipcli._load_config()
+        err = capsys.readouterr().err
+        assert str(cfg_file) in err
+        assert "invalid JSON" in err
+        assert err.count("invalid JSON") == 1
+
     def test_resolve_env_takes_priority(self, monkeypatch, tmp_path):
         monkeypatch.setenv("LLM_CMD_MODEL", "env/model")
         cfg_file = tmp_path / "config.json"

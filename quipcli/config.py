@@ -1,17 +1,28 @@
 import json
 import os
+import sys
 
 from . import constants
 
 _HARDCODED_DEFAULT_MODEL = "openai/gpt-4o-mini"
 
+_warned_bad_config = False
+
 
 def _load_config() -> dict:
+    global _warned_bad_config
     if not constants._CONFIG_FILE.exists():
         return {}
     try:
         return json.loads(constants._CONFIG_FILE.read_text())
     except json.JSONDecodeError, OSError:
+        if not _warned_bad_config:
+            print(
+                f"Warning: {constants._CONFIG_FILE} is invalid JSON, ignoring it "
+                "(falling back to defaults).",
+                file=sys.stderr,
+            )
+            _warned_bad_config = True
         return {}
 
 
